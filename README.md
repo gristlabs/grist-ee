@@ -5,9 +5,7 @@ Portions of this software are licensed as follows:
 * All content that resides under the "core/" directory of this repository
   is licensed under the Apache 2.0 license defined in "core/LICENSE".
 * All content that resides under the "ext/" directory of this repository
-  is licensed  under the license defined in "ext/LICENSE".
-    -- ext is currently missing - planning to make it a separate submodule,
-	   for now it can be just copied from monorepo.
+  is licensed under the license defined in "ext/LICENSE".
 
 For remaining content, all rights are reserved.
 
