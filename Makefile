@@ -11,6 +11,19 @@
 # Will need yarn installed, and a recent version of docker to build a
 # docker image.
 
+default:
+	@echo "To make and run Grist:"
+	@echo "  make requirements"
+	@echo "  make build"
+	@echo "  GRIST_SESSION_SECRET=something make start"
+	@echo ""
+	@echo "To make a Grist image (does not require above steps):"
+	@echo "  make docker"
+	@echo ""
+	@echo "To update material in ext that goes with what is in core:"
+	@echo "  make fetch"
+	@echo "  # (core HEAD must be something split directly from monorepo)"
+
 requirements:
 	cd ext && yarn install --frozen-lockfile --modules-folder=../node_modules --verbose
 	cd core && yarn install --frozen-lockfile --verbose
