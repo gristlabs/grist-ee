@@ -3,18 +3,24 @@
 # This is a script for updating the material in the ext directory.
 # It is a bit delicate, and for use in automation.
 
-if [ ! -e ../grist/ext ]; then
-  echo "Please call script in a repo that is side-by-side with grist repo"
+set -e
+
+monorepo="$1"
+if [[ "$monorepo" = "" ]]; then
+  echo "Please supply path to grist monorepo"
+  exit 1
+fi
+
+if [ ! -e "$monorepo/ext" ]; then
+  echo "Cannot find ext directory"
   exit 1
 fi
 
 workdir=tmp_checkout
 
-set -ex
-
 # Make a clean copy of ext directory by brute force.
 rm -rf $workdir
-git clone ../grist $workdir
+git clone $monorepo $workdir
 # It is nice to keep core and ext code in sync. Let's look at the latest
 # commit in core, then try to find where it lives in monorepo. This will
 # fail if the latest commit in core didn't in fact come from monorepo.
