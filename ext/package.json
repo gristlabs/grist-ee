@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "aws-sdk": "2.1061.0",
+    "@azure/storage-blob": "12.9.0",
+    "jsonwebtoken": "8.3.0"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "7.2.8"
+  }
+}

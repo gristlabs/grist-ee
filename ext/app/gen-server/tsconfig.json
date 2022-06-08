@@ -1,0 +1,13 @@
+{
+  "extends": "../../../buildtools/tsconfig-base-ext.json",
+  "include": [
+    "**/*",
+    "../../../app/server/**/*",
+    "../../../app/gen-server/**/*",
+    "../../../core/app/server/**/*",
+    "../../../core/app/gen-server/**/*"
+  ],
+  "references": [
+    { "path": "../common" },
+  ]
+}

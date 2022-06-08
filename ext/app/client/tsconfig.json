@@ -1,0 +1,12 @@
+{
+  "extends": "../../../buildtools/tsconfig-base-ext.json",
+  "include": [
+    "**/*",
+    "../../../app/client/**/*",
+    "../../../stubs/app/client/ui/ChangePasswordDialog.ts",
+    "../../../stubs/app/client/ui/MFAConfig.ts"
+  ],
+  "references": [
+    { "path": "../common" },
+  ]
+}

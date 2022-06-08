@@ -25,3 +25,6 @@ start:
 
 docker:
 	docker buildx build --load -t gristlabs/grist-ee --build-context=ext=ext core
+
+fetch:
+	./scripts/fetch_ext.sh
