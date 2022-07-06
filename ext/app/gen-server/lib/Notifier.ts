@@ -17,12 +17,12 @@ import {
   UserIdDelta
 } from 'app/gen-server/lib/HomeDBManager';
 import {INotifier} from 'app/server/lib/INotifier';
-import * as log from 'app/server/lib/log';
+import log from 'app/server/lib/log';
 import flatten = require('lodash/flatten');
 import pick = require('lodash/pick');
 import sortBy = require('lodash/sortBy');
 import upperFirst = require('lodash/upperFirst');
-import * as moment from 'moment';
+import moment from 'moment';
 import fetch from 'node-fetch';
 
 // TODO: move all sendgrid interactions to a queue.

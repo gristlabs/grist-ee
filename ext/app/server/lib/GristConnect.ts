@@ -24,7 +24,7 @@ import {forceSessionChange} from 'app/server/lib/BrowserSession';
 import {calcSignature} from 'app/server/lib/DiscourseConnect';
 import {expressWrap} from 'app/server/lib/expressWrap';
 import {GristLoginMiddleware, GristLoginSystem, GristServer} from 'app/server/lib/GristServer';
-import * as log from 'app/server/lib/log';
+import log from 'app/server/lib/log';
 import {stringParam} from 'app/server/lib/requestUtils';
 import type {NextFunction, Request, Response} from 'express';
 import {URL, URLSearchParams} from 'url';

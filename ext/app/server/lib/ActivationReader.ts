@@ -7,7 +7,7 @@ import { expressWrap } from 'app/server/lib/expressWrap';
 import * as express from 'express';
 import * as fs from 'fs';
 import * as jwt from 'jsonwebtoken';
-import * as moment from 'moment';
+import moment from 'moment';
 
 const GRIST_ACTIVATION = process.env.GRIST_ACTIVATION;
 const GRIST_ACTIVATION_FILE = process.env.GRIST_ACTIVATION_FILE;

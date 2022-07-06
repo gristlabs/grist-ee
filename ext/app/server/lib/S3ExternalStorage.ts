@@ -1,6 +1,6 @@
 import {ObjMetadata, ObjSnapshotWithMetadata, toExternalMetadata, toGristMetadata} from 'app/common/DocSnapshot';
 import { ExternalStorage } from 'app/server/lib/ExternalStorage';
-import * as S3 from 'aws-sdk/clients/s3';
+import S3 from 'aws-sdk/clients/s3';
 import * as fse from 'fs-extra';
 import { Readable } from 'stream';
 
