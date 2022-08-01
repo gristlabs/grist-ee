@@ -2,7 +2,7 @@ import {Banner, buildBannerMessage} from 'app/client/components/Banner';
 import {buildLimitStatusMessage, buildUpgradeMessage} from 'app/client/components/DocumentUsage';
 import {sessionStorageBoolObs} from 'app/client/lib/localStorageObs';
 import {DocPageModel} from 'app/client/models/DocPageModel';
-import {isFreeProduct} from 'app/common/Features';
+import {isFreePlan} from 'app/common/Features';
 import {canUpgradeOrg} from 'app/common/roles';
 import {Computed, Disposable, dom, DomComputed, makeTestId, Observable} from 'grainjs';
 
@@ -63,8 +63,12 @@ export class DocUsageBanner extends Disposable {
         return dom.create(Banner, {
           content: buildBannerMessage(
             buildLimitStatusMessage('approachingLimit', product?.features),
-            (product && isFreeProduct(product)
-              ? [' ', buildUpgradeMessage(canUpgradeOrg(org))]
+            (product && isFreePlan(product.name)
+              ? [' ', buildUpgradeMessage(
+                canUpgradeOrg(org),
+                'long',
+                () => this._docPageModel.appModel.showUpgradeModal()
+              )]
               : null
             ),
             testId('text')
@@ -85,15 +89,23 @@ export class DocUsageBanner extends Disposable {
         return dom.create(Banner, {
           content: buildBannerMessage(
             buildLimitStatusMessage(status, product?.features),
-            (product && isFreeProduct(product)
-              ? [' ', buildUpgradeMessage(canUpgrade)]
+            (product && isFreePlan(product.name)
+              ? [' ', buildUpgradeMessage(
+                canUpgrade,
+                'long',
+                () => this._docPageModel.appModel.showUpgradeModal()
+              )]
               : null
             ),
             testId('text'),
           ),
           contentSmall: buildBannerMessage(
-            (product && isFreeProduct(product)
-              ? buildUpgradeMessage(canUpgrade, 'short')
+            (product && isFreePlan(product.name)
+              ? buildUpgradeMessage(
+                canUpgrade,
+                'short',
+                () => this._docPageModel.appModel.showUpgradeModal()
+              )
               : buildLimitStatusMessage(status, product?.features)
             ),
             testId('text'),

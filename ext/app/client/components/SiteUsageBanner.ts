@@ -2,7 +2,7 @@ import {Banner, buildBannerMessage} from 'app/client/components/Banner';
 import {buildUpgradeMessage} from 'app/client/components/DocumentUsage';
 import {sessionStorageBoolObs} from 'app/client/lib/localStorageObs';
 import {AppModel} from 'app/client/models/AppModel';
-import {isFreeProduct} from 'app/common/Features';
+import {isFreePlan} from 'app/common/Features';
 import {isOwner} from 'app/common/roles';
 import {Disposable, dom, makeTestId, Observable} from 'grainjs';
 
@@ -53,8 +53,8 @@ export class SiteUsageBanner extends Disposable {
       return dom.create(Banner, {
         content: buildBannerMessage(
           limitsMessage,
-          (this._product && isFreeProduct(this._product)
-            ? [' ', buildUpgradeMessage(true)]
+          (this._product && isFreePlan(this._product.name)
+            ? [' ', buildUpgradeMessage(true, 'long', () => this._app.showUpgradeModal())]
             : null
           ),
           testId('text'),
@@ -73,15 +73,15 @@ export class SiteUsageBanner extends Disposable {
     return dom.create(Banner, {
       content: buildBannerMessage(
         limitsMessage,
-        (this._product && isFreeProduct(this._product)
-          ? [' ', buildUpgradeMessage(true)]
+        (this._product && isFreePlan(this._product.name)
+          ? [' ', buildUpgradeMessage(true, 'long', () => this._app.showUpgradeModal())]
           : null
         ),
         testId('text'),
       ),
       contentSmall: buildBannerMessage(
-        (this._product && isFreeProduct(this._product)
-          ? buildUpgradeMessage(true, 'short')
+        (this._product && isFreePlan(this._product.name)
+          ? buildUpgradeMessage(true, 'short', () => this._app.showUpgradeModal())
           : limitsMessage
         ),
       ),
