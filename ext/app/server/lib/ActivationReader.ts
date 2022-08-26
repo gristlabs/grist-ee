@@ -106,6 +106,7 @@ export class ActivationReader {
         const remaining = end.diff(now, 'days');
         if (remaining >= 0) {
           state.key = {
+            expirationDate: this._content.end,
             daysLeft: remaining,
           };
         }
@@ -115,11 +116,13 @@ export class ActivationReader {
       }
     }
     if (!state.key) {
-      const fromStart = now.diff(moment(this._activation.createdAt), 'days');
-      if (fromStart <= TRIAL_PERIOD) {
+      const trialStart = moment(this._activation.createdAt);
+      const daysSinceTrialStart = now.diff(moment(this._activation.createdAt), 'days');
+      if (daysSinceTrialStart < TRIAL_PERIOD) {
         state.trial = {
           days: TRIAL_PERIOD,
-          daysLeft: TRIAL_PERIOD - fromStart,
+          expirationDate: trialStart.add(TRIAL_PERIOD, 'days').format(),
+          daysLeft: TRIAL_PERIOD - daysSinceTrialStart,
         };
       }
     }
