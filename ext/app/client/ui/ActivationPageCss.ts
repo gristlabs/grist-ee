@@ -1,4 +1,4 @@
-import {colors, mediaSmall, vars} from 'app/client/ui2018/cssVars';
+import {mediaSmall, theme, vars} from 'app/client/ui2018/cssVars';
 import {icon} from 'app/client/ui2018/icons';
 import {styled} from 'grainjs';
 
@@ -18,7 +18,7 @@ export const siteInfoHeader = styled('div', `
   height: 32px;
   line-height: 32px;
   margin-bottom: 24px;
-  color: ${colors.dark};
+  color: ${theme.text};
   font-size: ${vars.xxxlargeFontSize};
   font-weight: ${vars.headerControlTextWeight};
 `);
@@ -29,6 +29,7 @@ export const summaryRowHeader = styled('div', `
   display: inline-block;
   vertical-align: top;
   font-weight: bold;
+  color: ${theme.text};
 `);
 
 export const summaryRow = styled('div', `
@@ -60,9 +61,9 @@ export const planStatusContainer = styled('div', `
   align-items: center;
   flex-grow: 1;
   min-width: 0;
-  border: 1px solid ${colors.mediumGreyOpaque};
+  border: 1px solid ${theme.inputReadonlyBorder};
   border-radius: ${vars.controlBorderRadius};
-  background-color: ${colors.lightGrey};
+  background-color: ${theme.inputReadonlyBg};
 
   @media ${mediaSmall} {
     & {
@@ -88,10 +89,10 @@ export const planStatusIcon = styled(icon, `
   height: 24px;
 
   &-valid {
-    --icon-color: ${colors.lightGreen};
+    --icon-color: ${theme.inputValid};
   }
   &-invalid {
-    --icon-color: ${colors.error};
+    --icon-color: ${theme.inputInvalid};
   }
 `);
 

@@ -8,8 +8,9 @@ import {createForbiddenPage} from 'app/client/ui/errorPages';
 import {leftPanelBasic} from 'app/client/ui/LeftPanelCommon';
 import {pagePanels} from 'app/client/ui/PagePanels';
 import {createTopBarHome} from 'app/client/ui/TopBar';
-import {cssBreadcrumbs, cssBreadcrumbsLink, separator} from 'app/client/ui2018/breadcrumbs';
+import {cssBreadcrumbs, separator} from 'app/client/ui2018/breadcrumbs';
 import {bigPrimaryButtonLink} from 'app/client/ui2018/buttons';
+import {cssLink} from 'app/client/ui2018/links';
 import {loadingSpinner} from 'app/client/ui2018/loaders';
 import {IActivationStatus} from 'app/common/ActivationAPI';
 import {commonUrls} from 'app/common/gristUrls';
@@ -50,7 +51,7 @@ export class ActivationPage extends Disposable {
   private _buildMainHeader() {
     return dom.frag(
       cssBreadcrumbs({ style: 'margin-left: 16px;' },
-        cssBreadcrumbsLink(
+        cssLink(
           urlState().setLinkUrl({}),
           'Home',
           testId('home'),
