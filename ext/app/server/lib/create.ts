@@ -11,14 +11,17 @@ import { makeSimpleCreator } from 'app/server/lib/ICreate';
 export const create = makeSimpleCreator({
   storage: [
     {
+      name: 'azure',
       check: () => checkAzureExternalStorage() !== undefined,
       create: configureAzureExternalStorage,
     },
     {
+      name: 's3',
       check: () => checkS3ExternalStorage() !== undefined,
       create: configureS3ExternalStorage,
     },
     {
+      name: 'minio',
       check: () => checkMinIOExternalStorage() !== undefined,
       create: configureMinIOExternalStorage,
     },

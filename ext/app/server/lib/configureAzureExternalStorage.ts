@@ -20,9 +20,11 @@ export function checkAzureExternalStorage() {
   }) === undefined) {
     return undefined;
   }
-  const bucket = settings.flag('container').requireString({
+  // For compatibility with existing tests, ignore Azure if no bucket is set.
+  const bucket = settings.flag('container').readString({
    envVar: ['GRIST_AZURE_CONTAINER', 'TEST_S3_BUCKET', 'GRIST_DOCS_S3_BUCKET'],
   });
+  if (bucket === undefined) { return undefined; }
   const prefix = settings.flag('prefix').requireString({
     envVar: ['GRIST_AZURE_PREFIX', 'TEST_S3_PREFIX', 'GRIST_DOCS_S3_PREFIX'],
     defaultValue: 'docs/',
