@@ -10,7 +10,10 @@
  * global instance of a class that's responsible for managing all banner messages. The
  * UI can then call a method for showing a particular banner with a given set of options.
  * Unlike notifications, banners typically aren't transient, so we'd need to decide how to
- * handle showing 2 (or more) banner messages at a time. */
+ * handle showing 2 (or more) banner messages at a time.
+ *
+ * With current implementation, both view-as and doc-usage banners can show at the same time.
+ */
 
 import {buildActivationBanner} from 'app/client/components/ActivationBanner';
 import {DocUsageBanner} from 'app/client/components/DocUsageBanner';
