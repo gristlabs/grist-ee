@@ -25,6 +25,22 @@ import upperFirst = require('lodash/upperFirst');
 import moment from 'moment';
 import fetch from 'node-fetch';
 
+export const SENDGRID_API_CONFIG = {
+  // Main API prefix.
+  prefix: "https://api.sendgrid.com/v3",
+  // API endpoint for adding a user to a list.
+  enroll: "/marketing/contacts",
+  // API endpoint for finding a user in SendGrid.
+  search: "/marketing/contacts/search",
+  // API endpoint for finding a user in SendGrid by email.
+  // TODO: could replace use of search with this.
+  searchByEmail: "/marketing/contacts/search/emails",
+  // API endpoint for removing a user from a list.
+  listRemove: "/marketing/lists/{{id}}/contacts",
+  // API endpoint for sending an email.
+  send: "/mail/send",
+};
+
 // TODO: move all sendgrid interactions to a queue.
 
 export const TwoFactorEvents = StringUnion(
@@ -55,6 +71,16 @@ export interface SendGridMail {
       enable: boolean;
     }
   };
+}
+
+export interface SendGridContact {
+  contacts: [{
+    email: string;
+    first_name: string;
+    last_name: string;
+  }],
+  list_ids?: string[];
+  custom_fields?: Record<string, any>;
 }
 
 export interface SendGridAddress {
@@ -147,20 +173,6 @@ export interface SendGridSearchPossibleHit {
 }
 
 export interface SendGridConfig {
-  api: {
-    // Main API prefix (e.g. "https://api.sendgrid.com/v3").
-    prefix: string;
-    // API endpoint for adding a user to a list (e.g. "/marketing/contacts").
-    enroll: string;
-    // API endpoint for finding a user in SendGrid (e.g. "/marketing/contacts/search").
-    search: string;
-    // API endpoint for finding a user in SendGrid by email (e.g. "/marketing/contacts/search/emails").
-    searchByEmail: string;
-    // API endpoint for removing a user from a list (e.g. "/marketing/lists/{{id}}/contacts").
-    listRemove: string;
-    // API endpoint for sending an email (e.g. "/mail/send").
-    send: string;
-  },
   address: {
     from: {
       email: string;
@@ -181,10 +193,15 @@ export interface SendGridConfig {
   list: {
     singleUserOnboarding?: string;
     appSumoSignUps?: string;
+    trial?: string;
   },
   unsubscribeGroup: {
     invites?: number;
     billingManagers?: number;
+  },
+  field?: {
+    callScheduled?: string;
+    userRef?: string;
   },
 }
 
@@ -202,7 +219,7 @@ export class UnsubscribeNotifier implements INotifier {
     const user = await this._dbManager.getFullUser(userId);
     const email = user.email;
     const description = `deleteUser ${email}`;
-    const response = await this._fetch(this._sendgridConfig.api.searchByEmail, {
+    const response = await this._fetch(SENDGRID_API_CONFIG.searchByEmail, {
       method: 'POST',
       body: {
         emails: [email],   // email lookup is case insensitive
@@ -222,7 +239,7 @@ export class UnsubscribeNotifier implements INotifier {
         return;
       }
       const id = contact.id;
-      await this._fetch(this._sendgridConfig.api.enroll + '?' + new URLSearchParams({
+      await this._fetch(SENDGRID_API_CONFIG.enroll + '?' + new URLSearchParams({
         ids: id
       }), {
         method: 'DELETE',
@@ -257,7 +274,7 @@ export class UnsubscribeNotifier implements INotifier {
     if (options.body) {
       options.body = JSON.stringify(options.body);
     }
-    return fetch(`${this._sendgridConfig.api.prefix}${path}`, {
+    return fetch(`${SENDGRID_API_CONFIG.prefix}${path}`, {
       headers,
       ...options
     });
@@ -324,9 +341,28 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
       log.debug(`sendgrid skipped: ${description}`);
       return;
     }
-    const response = await this._fetch(this._sendgridConfig.api.send, {
+    const response = await this._fetch(SENDGRID_API_CONFIG.send, {
       method: 'POST',
       body
+    });
+    if (!response.ok) {
+      log.error(`sendgrid error ${response.status} ${response.statusText}: ${description}`);
+    } else {
+      log.debug(`sendgrid sent: ${description}`);
+    }
+  }
+
+  /**
+   * Send new or updated contact information to sendgrid.
+   */
+  public async sendContactInfo(body: SendGridContact, description: string) {
+    if (!this._getKey()) {
+      log.debug(`sendgrid skipped: ${description}`);
+      return;
+    }
+    const response = await this._fetch(SENDGRID_API_CONFIG.enroll, {
+      method: 'PUT',
+      body,
     });
     if (!response.ok) {
       log.error(`sendgrid error ${response.status} ${response.statusText}: ${description}`);
@@ -548,7 +584,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
         ...this._fromGrist(),
         ...(unsubscribeGroupId !== undefined ? this._withUnsubscribe(unsubscribeGroupId) : {}),
         personalizations: [{
-          to: this._getManagers(account),
+          to: this._getManagers(account).map(user => this._asSendGridAddress(user)),
           dynamic_template_data: env
         }],
         template_id: templateId,
@@ -590,7 +626,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
         ...this._fromGrist(),
         ...(unsubscribeGroupId !== undefined ? this._withUnsubscribe(unsubscribeGroupId) : {}),
         personalizations: [{
-          to: this._getManagers(fullAccount),
+          to: this._getManagers(fullAccount).map(user => this._asSendGridAddress(user)),
           dynamic_template_data: {
             ...this._getBillingTemplate(fullAccount),
             howSoon,
@@ -602,6 +638,41 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
         ...this._withoutUnsubscribe(),
       };
       await this.sendMessage(mail, `trialPeriodEndingSoon for ${fullAccount.orgs.map(o => o.name)}`);
+    });
+  }
+
+  /**
+   * Called when an account enters trial mode. Puts billing managers
+   * in a special trial list in sendgrid.
+   */
+  public async trialingSubscription(account: BillingAccount) {
+    const trialListId = this._sendgridConfig.list.trial;
+    if (!trialListId) { return; }
+    await this._handleEvent(async () => {
+      const fullAccount = await this._dbManager.getFullBillingAccount(account.id);
+      const managers = this._getManagers(fullAccount);
+      await Promise.all(managers.map(
+        manager => this._addOrUpdateContact(manager, {listIds: [trialListId]})
+      ));
+    });
+  }
+
+  /**
+   * Called when a user schedules a call. Sets the call_scheduled custom
+   * field in sendgrid for that user.
+   */
+  public async scheduledCall(userRef: string) {
+    await this._handleEvent(async () => {
+      const user = await this._dbManager.getUserByRef(userRef);
+      const fullUser = user && this._dbManager.makeFullUser(user);
+      log.debug('Notifier scheduledCall', {userRef, fullUser});
+      if (fullUser) {
+        await this._addOrUpdateContact(fullUser, {
+          customFields: {
+            callScheduled: 1,
+          },
+        });
+      }
     });
   }
 
@@ -649,14 +720,6 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * sure the user has signed up.
    */
   private async _updateList(user: FullUser, create: boolean = false) {
-    // TODO: re-enable a special team member onboarding series.
-    // For now, add all user to the same list.
-    /*
-     const orgs = (await this._dbManager.getOrgs(user.id, null)).data;
-     if (!orgs) { throw new Error('org list failed'); }
-     const teamSite = orgs.find(org => org.owner === null);
-     await this._setList(user, teamSite ? 'teamOnboarding' : 'singleUserOnboarding', create);
-    */
     const lists: Array<keyof SendGridConfig['list']> = [];
     if (this._sendgridConfig.list.singleUserOnboarding) {
       lists.push('singleUserOnboarding');
@@ -674,7 +737,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
   }
 
   /**
-   * Place user on a specific list, removing it from other lists if necessary.
+   * Place user on a specific list or lists.
    * If `create` is set, the user can be added as a fresh contact
    * if they haven't already.  This should only be set if we are
    * sure the user has signed up.
@@ -694,7 +757,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     // experimentation doesn't help much either.  Not sure what whitelist should
     // be or how quoting can be achieved.
     const safeEmail = email.replace(/['"%]/g, '');
-    const response = await this._fetch(this._sendgridConfig.api.search, {
+    const response = await this._fetch(SENDGRID_API_CONFIG.search, {
       method: 'POST',
       body: {
         query: `primary_email LIKE '${safeEmail}%'`  // this looks silly but any small change
@@ -711,40 +774,28 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
       match = searchResult.result.find(hit => hit.email === email);
     }
     if (!match) {
-      if (create) { await this._addOrUpdateContact(user, listIds); }
+      if (create) { await this._addOrUpdateContact(user, {listIds}); }
       return;
     }
     if (listIds.every(listId => match!.list_ids.includes(listId))) {
       return;
     }
-    // There was code here to theoretically move user from one list to a mutually
-    // exclusive list.  This never ended up used, and is now undesired.
-    // It was sufficiently hard to figure out how to do it that I'm leaving
-    // the code here as a comment, in case we go this way in future.
-    /*
-    for (const existingListId of match.list_ids) {
-      // Check whether user is on a list that they shouldn't be on anymore.
-      // TODO: logic will need updating once there is a team creator list.
-      const listIsUndesired =
-        existingListId === SENDGRID.list.singleUserOnboarding && listId === SENDGRID.list.teamOnboarding;
-      if (!listIsUndesired) { continue; }
-      const url = SENDGRID.api.listRemove.replace('{{id}}', existingListId);
-      response = await this._fetch(`${url}?contact_ids=${match.id}`,
-                                   { method: 'DELETE' });
-      if (!response.ok) {
-        log.error(`sendgrid error ${response.status} ${response.statusText}: ${description} ` +
-                  `remove ${existingListId}`);
-      }
-    }
-    */
-    await this._addOrUpdateContact(user, listIds);
+    await this._addOrUpdateContact(user, {listIds});
   }
 
   /**
    * Put user on a list.  There's a funky asymmetry between the way users are added
    * to lists and the way they are removed from lists.
+   * Update: there is an endpoint for adding users to lists directly now, but
+   * it uses a different numeric list id rather than the text id we store, so
+   * we still don't use it.
    */
-  private async _addOrUpdateContact(user: FullUser, listIds: string[]) {
+  private async _addOrUpdateContact(user: FullUser, options: {
+    listIds?: string[],
+    customFields?: {
+      callScheduled?: number,
+    },
+  }) {
     // To pass on name to sendgrid, we need to divide into first and last parts.
     // Split name up brutally.  Hopefully they'll just be added together again when
     // email is sent.
@@ -756,23 +807,21 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
       first_name: first.substr(0, 50),   // this is max length for this field in sendgrid
       last_name: last.substr(0, 50)      // this is max length for this field in sendgrid
     };
-    const description = `enrollment for ${user.email} with lists ${listIds}`;
-    if (!this._getKey()) {
-      log.debug(`sendgrid skipped: ${description}`);
-      return;
+    const description = `enrollment for ${user.email} with options ${options}`;
+    const customFields: Record<string, any> = {};
+    if (options.customFields?.callScheduled && this._sendgridConfig.field?.callScheduled) {
+      customFields[this._sendgridConfig.field.callScheduled] = options.customFields.callScheduled;
     }
-    const response = await this._fetch(this._sendgridConfig.api.enroll, {
-      method: 'PUT',
-      body: {
-        list_ids: listIds,
-        contacts: [contact]
-      }
-    });
-    if (!response.ok) {
-      log.error(`sendgrid error ${response.status} ${response.statusText}: ${description}`);
-    } else {
-      log.debug(`sendgrid sent: ${description}`);
+    if (this._sendgridConfig.field?.userRef) {
+      customFields[this._sendgridConfig.field.userRef] = user.ref;
     }
+    await this.sendContactInfo({
+      ...(options.listIds && { list_ids: options.listIds }),
+      ...(Object.keys(customFields).length && {
+        custom_fields: customFields,
+      }),
+      contacts: [contact]
+    }, description);
   }
 
   /**
@@ -797,10 +846,13 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
   /**
    * Compile a list of billing managers in a format compatible with SendGrid api.
    */
-  private _getManagers(account: BillingAccount): SendGridAddress[] {
+  private _getManagers(account: BillingAccount): FullUser[] {
     // TODO: correct typing on account managers.
-    const managers = account.managers as any[] as FullUser[];
-    return managers.map(manager => pick(manager, 'email', 'name'));
+    return account.managers as any[] as FullUser[];
+  }
+
+  private _asSendGridAddress(user: FullUser): SendGridAddress {
+    return pick(user, 'email', 'name');
   }
 
   /**
