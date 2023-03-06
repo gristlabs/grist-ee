@@ -78,9 +78,9 @@ export interface SendGridContact {
     email: string;
     first_name: string;
     last_name: string;
+    custom_fields?: Record<string, any>;
   }],
   list_ids?: string[];
-  custom_fields?: Record<string, any>;
 }
 
 export interface SendGridAddress {
@@ -360,6 +360,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
       log.debug(`sendgrid skipped: ${description}`);
       return;
     }
+    log.debug(`sendgrid contact info: ${JSON.stringify(body)}`);
     const response = await this._fetch(SENDGRID_API_CONFIG.enroll, {
       method: 'PUT',
       body,
@@ -367,7 +368,8 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     if (!response.ok) {
       log.error(`sendgrid error ${response.status} ${response.statusText}: ${description}`);
     } else {
-      log.debug(`sendgrid sent: ${description}`);
+      const reply = await response.json();
+      log.debug(`sendgrid sent: ${description}, response ${JSON.stringify(reply)}`);
     }
   }
 
@@ -802,12 +804,12 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     const parts = user.name.split(' ');
     const first = parts[0] || '';
     const last = parts.slice(1).join(' ');
-    const contact = {
+    const contact: SendGridContact['contacts'][number] = {
       email: normalizeEmail(user.email), // don't want to send multiple emails to same mailbox
       first_name: first.substr(0, 50),   // this is max length for this field in sendgrid
       last_name: last.substr(0, 50)      // this is max length for this field in sendgrid
     };
-    const description = `enrollment for ${user.email} with options ${options}`;
+    const description = `enrollment for ${user.email} with options ${JSON.stringify(options)}`;
     const customFields: Record<string, any> = {};
     if (options.customFields?.callScheduled && this._sendgridConfig.field?.callScheduled) {
       customFields[this._sendgridConfig.field.callScheduled] = options.customFields.callScheduled;
@@ -815,11 +817,11 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     if (this._sendgridConfig.field?.userRef) {
       customFields[this._sendgridConfig.field.userRef] = user.ref;
     }
+    if (Object.keys(customFields).length) {
+      contact.custom_fields = customFields;
+    }
     await this.sendContactInfo({
       ...(options.listIds && { list_ids: options.listIds }),
-      ...(Object.keys(customFields).length && {
-        custom_fields: customFields,
-      }),
       contacts: [contact]
     }, description);
   }
