@@ -1,4 +1,5 @@
 import {normalizeEmail} from 'app/common/emails';
+import {isFreePlan} from 'app/common/Features';
 import {encodeUrl, GristLoadConfig, IGristUrlState} from 'app/common/gristUrls';
 import {isNonNullish} from 'app/common/gutil';
 import {FullUser} from 'app/common/LoginSessionAPI';
@@ -138,6 +139,7 @@ export interface SendGridMemberChangeTemplate extends SendGridBillingTemplate {
   countAfter: number;
   orgUrl: string;
   billingUrl: string;
+  paidPlan: boolean;
 }
 
 /**
@@ -577,6 +579,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
         initiatingUser,
         countBefore: change.countBefore,
         countAfter: change.countAfter,
+        paidPlan: !isFreePlan(account.product.name),
       };
       const unsubscribeGroupId = this._sendgridConfig.unsubscribeGroup.billingManagers;
       if (unsubscribeGroupId === undefined) {
