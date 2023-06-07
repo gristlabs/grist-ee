@@ -9,6 +9,7 @@ import { checkS3ExternalStorage,
 import { makeSimpleCreator } from 'app/server/lib/ICreate';
 
 export const create = makeSimpleCreator({
+  deploymentType: 'enterprise',
   storage: [
     {
       name: 'azure',
