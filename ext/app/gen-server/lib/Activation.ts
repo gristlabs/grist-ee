@@ -63,7 +63,7 @@ export class Activation implements IBilling {
     }
 
     app.get('/activation', ...middleware, expressWrap(async (req, resp) => {
-      return server.sendAppPage(req, resp, {path: 'activation.html', status: 200, config: {}});
+      return server.sendAppPage(req, resp, {path: 'app.html', status: 200, config: {}});
     }));
   }
 
