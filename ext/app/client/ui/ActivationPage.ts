@@ -13,16 +13,19 @@ import {bigPrimaryButtonLink} from 'app/client/ui2018/buttons';
 import {cssLink} from 'app/client/ui2018/links';
 import {loadingSpinner} from 'app/client/ui2018/loaders';
 import {IActivationStatus} from 'app/common/ActivationAPI';
-import {commonUrls} from 'app/common/gristUrls';
-import {Disposable, dom, makeTestId, Observable} from 'grainjs';
+import {commonUrls, getPageTitleSuffix} from 'app/common/gristUrls';
+import {getGristConfig} from 'app/common/urlUtils';
+import {Computed, Disposable, dom, makeTestId, Observable, subscribe} from 'grainjs';
 
 const testId = makeTestId('test-ap-');
 
 export class ActivationPage extends Disposable {
+  private readonly _currentPage = Computed.create(this, urlState().state, (_use, s) => s.activation);
   private _model: ActivationModel = new ActivationModelImpl(this._appModel);
 
   constructor(private _appModel: AppModel) {
     super();
+    this._setPageTitle();
     this._model.fetchActivationStatus(true).catch(reportError);
   }
 
@@ -93,6 +96,18 @@ export class ActivationPage extends Disposable {
         ),
       ];
     });
+  }
+
+  private _setPageTitle() {
+    this.autoDispose(subscribe(this._currentPage, (_use, page): string => {
+      const suffix = getPageTitleSuffix(getGristConfig());
+      switch (page) {
+        case undefined:
+        case 'activation': {
+          return document.title = `Activation${suffix}`;
+        }
+      }
+    }));
   }
 }
 
