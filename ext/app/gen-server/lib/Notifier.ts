@@ -218,6 +218,10 @@ export class UnsubscribeNotifier implements INotifier {
   }
 
   public async deleteUser(userId: number) {
+    if (!this._getKey()) {
+      log.warn(`API key not set, cannot delete user ${userId} from sendgrid`);
+      return;
+    }
     const user = await this._dbManager.getFullUser(userId);
     const email = user.email;
     const description = `deleteUser ${email}`;

@@ -3,6 +3,7 @@
   "include": [
     "**/*",
     "../../../app/client/**/*",
+    "../../../stubs/app/client/ui/DeleteAccountDialog.ts",
     "../../../stubs/app/client/ui/ChangePasswordDialog.ts",
     "../../../stubs/app/client/ui/MFAConfig.ts"
   ],
