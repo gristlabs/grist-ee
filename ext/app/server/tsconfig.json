@@ -8,6 +8,7 @@
     "../../../core/app/server/**/*",
     "../../../core/app/gen-server/**/*",
     "../../../stubs/app/server/declarations.d.ts",
+    "../../../stubs/app/server/prometheus-exporter.ts",
     "../../../stubs/app/server/server.ts"
   ],
   "references": [
