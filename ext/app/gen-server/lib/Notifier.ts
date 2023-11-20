@@ -572,6 +572,23 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
       const membersAdded = sortBy(membersAfter.filter(user => !idsBefore.has(user.id)), 'name');
       const membersRemoved = sortBy(membersBefore.filter(user => !idsAfter.has(user.id)), 'name');
       if (membersAdded.length === 0 && membersRemoved.length === 0) { return; }
+
+      if (membersAdded.length > 0) {
+        this._gristServer.getTelemetry().logEvent(null, 'invitedMember', {
+          full: {
+            count: membersAdded.length,
+            siteId: change.org.id,
+          },
+        });
+      }
+      if (membersRemoved.length > 0) {
+        this._gristServer.getTelemetry().logEvent(null, 'uninvitedMember', {
+          full: {
+            count: membersRemoved.length,
+            siteId: change.org.id,
+          },
+        });
+      }
       const added = await Promise.all(membersAdded.map(user => this._dbManager.getFullUser(user.id)));
       const removed = await Promise.all(membersRemoved.map(user => this._dbManager.getFullUser(user.id)));
       const initiatingUser = await this._dbManager.getFullUser(change.userId);
