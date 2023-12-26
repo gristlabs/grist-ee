@@ -4,19 +4,27 @@ import {encodeUrl, GristLoadConfig, IGristUrlState} from 'app/common/gristUrls';
 import {isNonNullish} from 'app/common/gutil';
 import {FullUser} from 'app/common/LoginSessionAPI';
 import * as roles from 'app/common/roles';
-import {StringUnion} from 'app/common/StringUnion';
-import {BillingAccount} from "app/gen-server/entity/BillingAccount";
-import {Document} from "app/gen-server/entity/Document";
-import {Organization} from "app/gen-server/entity/Organization";
-import {User} from "app/gen-server/entity/User";
+import {BillingAccount} from 'app/gen-server/entity/BillingAccount';
+import {Document} from 'app/gen-server/entity/Document';
+import {Organization} from 'app/gen-server/entity/Organization';
+import {User} from 'app/gen-server/entity/User';
 import {Workspace} from 'app/gen-server/entity/Workspace';
-import {GristServer} from 'app/server/lib/GristServer';
+import { SENDGRID_CONFIG } from 'app/gen-server/lib/configureSendGridNotifier';
 import {
   HomeDBManager,
   NotifierEvents,
   UserChange,
   UserIdDelta
 } from 'app/gen-server/lib/HomeDBManager';
+import {
+  SendGridAddress, SendGridBillingTemplate,
+  SendGridConfig, SendGridContact,
+  SendGridInviteResourceKind, SendGridInviteTemplate,
+  SendGridMail, SendGridMemberChangeTemplate, SendGridPersonalization,
+  SendGridSearchHit, SendGridSearchResult, SendGridSearchResultVariant,
+  TwoFactorEvent
+} from 'app/gen-server/lib/NotifierTypes';
+import {GristServer} from 'app/server/lib/GristServer';
 import {INotifier} from 'app/server/lib/INotifier';
 import log from 'app/server/lib/log';
 import flatten = require('lodash/flatten');
@@ -44,174 +52,13 @@ export const SENDGRID_API_CONFIG = {
 
 // TODO: move all sendgrid interactions to a queue.
 
-export const TwoFactorEvents = StringUnion(
-  'twoFactorMethodAdded',
-  'twoFactorMethodRemoved',
-  'twoFactorPhoneNumberChanged',
-  'twoFactorEnabled',
-  'twoFactorDisabled',
-);
-
-export type TwoFactorEvent = typeof TwoFactorEvents.type;
-
-/**
- * Structure of sendgrid email requests.  Each request references a template
- * (stored on sendgrid site) and a list of people to send a copy of that template
- * to, along with the relevant values to use for template variables.
- */
-export interface SendGridMail {
-  personalizations: SendGridPersonalization[];
-  from: SendGridAddress;
-  reply_to: SendGridAddress;
-  template_id: string;
-  asm?: {  // unsubscribe settings
-    group_id: number;
-  };
-  mail_settings?: {
-    bypass_list_management?: {
-      enable: boolean;
-    }
-  };
-}
-
-export interface SendGridContact {
-  contacts: [{
-    email: string;
-    first_name: string;
-    last_name: string;
-    custom_fields?: Record<string, any>;
-  }],
-  list_ids?: string[];
-}
-
-export interface SendGridAddress {
-  email: string;
-  name: string;
-}
-
-export interface SendGridPersonalization {
-  to: SendGridAddress[];
-  dynamic_template_data: {[key: string]: any};
-}
-
-/**
- * Structure of sendgrid invite template.  This is entirely under our control, it
- * is the information we choose to send to an email template for invites.
- */
-
-export interface SendGridInviteTemplate {
-  user: FullUser;
-  host: FullUser;
-  resource: SendGridInviteResource;
-  access: SendGridInviteAccess;
-}
-
-export interface SendGridInviteResource {
-  kind: SendGridInviteResourceKind;
-  kindUpperFirst: string;
-  name: string;
-  url: string;
-}
-
-export type SendGridInviteResourceKind = 'team site' | 'workspace' | 'document';
-
-export interface SendGridInviteAccess {
-  role: string;
-  canEditAccess?: boolean;
-  canEdit?: boolean;
-  canView?: boolean;
-  canManageBilling?: boolean;
-}
-
-// Common parameters included in emails to active billing managers.
-export interface SendGridBillingTemplate {
-  org: {id: number, name: string};
-  orgUrl: string;
-  billingUrl: string;
-}
-
-export interface SendGridMemberChangeTemplate extends SendGridBillingTemplate {
-  initiatingUser: FullUser;
-  added: FullUser[];
-  removed: FullUser[];
-  org: {id: number, name: string};
-  countBefore: number;
-  countAfter: number;
-  orgUrl: string;
-  billingUrl: string;
-  paidPlan: boolean;
-}
-
-/**
- * Format of sendgrid responses when looking up a user by email address using
- * SENDGRID.search
- */
-export interface SendGridSearchResult {
-  contact_count: number;
-  result: SendGridSearchHit[];
-}
-
-export interface SendGridSearchHit {
-  id: string;
-  email: string;
-  list_ids: string[];
-}
-
-/**
- * Alternative format of sendgrid responses when looking up a user by email
- * address using SENDGRID.searchByEmail
- *   https://docs.sendgrid.com/api-reference/contacts/get-contacts-by-emails
- */
-export interface SendGridSearchResultVariant {
-  result: Record<string, SendGridSearchPossibleHit>;
-}
-
-/**
- * Documentation is contradictory on format of results when contacts not found, but if
- * something is found there should be a contact field.
- */
-export interface SendGridSearchPossibleHit {
-  contact?: SendGridSearchHit;
-}
-
-export interface SendGridConfig {
-  address: {
-    from: {
-      email: string;
-      name: string;
-    }
-  },
-  template: {
-    invite?: string;
-    billingManagerInvite?: string;
-    memberChange?: string;
-    trialPeriodEndingSoon?: string;
-    twoFactorMethodAdded?: string;
-    twoFactorMethodRemoved?: string;
-    twoFactorPhoneNumberChanged?: string;
-    twoFactorEnabled?: string;
-    twoFactorDisabled?: string;
-  },
-  list: {
-    singleUserOnboarding?: string;
-    appSumoSignUps?: string;
-    trial?: string;
-  },
-  unsubscribeGroup: {
-    invites?: number;
-    billingManagers?: number;
-  },
-  field?: {
-    callScheduled?: string;
-    userRef?: string;
-  },
-}
-
+export type NotifierSendMessageCallback = (body: SendGridMail, description: string) => Promise<void>;
 
 /**
  * A notifier that sends no messages, and is sufficient only for unsubscribing/removing a user.
  */
 export class UnsubscribeNotifier implements INotifier {
+  protected _testSendMessageCallback?: NotifierSendMessageCallback;
   private _testPendingNotifications: number = 0;  // for test purposes, track notification in progress
 
   public constructor(protected _dbManager: HomeDBManager, protected _sendgridConfig: SendGridConfig) {
@@ -263,6 +110,12 @@ export class UnsubscribeNotifier implements INotifier {
   // for test purposes, check if any notifications are in progress
   public get testPending(): boolean {
     return this._testPendingNotifications > 0;
+  }
+
+  // for test purposes, override sendMessage
+  public testSetSendMessageCallback(op: (body: SendGridMail, description: string) => Promise<void>) {
+    this._testSendMessageCallback = op;
+    return SENDGRID_CONFIG;
   }
 
   /**
@@ -343,6 +196,9 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * @param description: a short summary of email for use in log messages
    */
   public async sendMessage(body: SendGridMail, description: string) {
+    if (this._testSendMessageCallback) {
+      return this._testSendMessageCallback(body, description);
+    }
     if (!this._getKey()) {
       log.debug(`sendgrid skipped: ${description}`);
       return;
