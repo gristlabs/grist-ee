@@ -1,6 +1,44 @@
 import {HomeDBManager} from 'app/gen-server/lib/HomeDBManager';
-import {Notifier, SendGridConfig} from 'app/gen-server/lib/Notifier';
+import {Notifier} from 'app/gen-server/lib/Notifier';
+import {SendGridConfig} from 'app/gen-server/lib/NotifierTypes';
 import {GristServer} from 'app/server/lib/GristServer';
+
+/**
+ * Stub SendGrid config. Actual values will be pulled from config.json
+ * if available.
+ */
+export const SENDGRID_CONFIG: SendGridConfig = {
+  address: {
+    from: {
+      email: 'support@example.com',
+      name: 'Replace This',
+    },
+  },
+  template: {
+    invite: 'sendgrid-template-id',
+    billingManagerInvite: 'sendgrid-template-id',
+    memberChange: 'sendgrid-template-id',
+    trialPeriodEndingSoon: 'sendgrid-template-id',
+    twoFactorMethodAdded: 'sendgrid-template-id',
+    twoFactorMethodRemoved: 'sendgrid-template-id',
+    twoFactorPhoneNumberChanged: 'sendgrid-template-id',
+    twoFactorEnabled: 'sendgrid-template-id',
+    twoFactorDisabled: 'sendgrid-template-id',
+  },
+  list: {
+    singleUserOnboarding: 'sendgrid-list-id',
+    appSumoSignUps: 'sendgrid-list-id-unused',
+    trial: 'sendgrid-list-id-unused',
+  },
+  field: {
+    callScheduled: 'xx_N',
+    userRef: 'xx_T',
+  },
+  unsubscribeGroup: {
+    invites: 99998,
+    billingManagers: 99999,
+  },
+};
 
 export function configureSendGridNotifier(dbManager: HomeDBManager, gristConfig: GristServer) {
   if (!process.env.SENDGRID_API_KEY) { return undefined; }
