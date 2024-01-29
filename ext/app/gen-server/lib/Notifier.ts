@@ -4,6 +4,7 @@ import {encodeUrl, GristLoadConfig, IGristUrlState} from 'app/common/gristUrls';
 import {isNonNullish} from 'app/common/gutil';
 import {FullUser} from 'app/common/LoginSessionAPI';
 import * as roles from 'app/common/roles';
+import {StringUnion} from 'app/common/StringUnion';
 import {BillingAccount} from 'app/gen-server/entity/BillingAccount';
 import {Document} from 'app/gen-server/entity/Document';
 import {Organization} from 'app/gen-server/entity/Organization';
@@ -275,7 +276,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
       } else {
         kind = 'document';
       }
-      const url = await this._gristServer.getResourceUrl(resource);
+      const url = await this._makeInviteUrl(resource);
       // Ok, we've gathered all the information we may need.  Time to prepare a payload
       // to send to sendgrid.
       const personalizations: SendGridPersonalization[] = [];
@@ -786,8 +787,13 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
       }
     };
   }
-}
 
+  private async _makeInviteUrl(resource: Organization|Workspace|Document) {
+    const url = new URL(await this._gristServer.getResourceUrl(resource));
+    url.searchParams.set('utm_id', `invite-${getResourceName(resource)}`);
+    return url.href;
+  }
+}
 
 /**
  * Describe the kind of resource in various ways to make handlebar templates
@@ -801,4 +807,19 @@ function describeKind(kind: SendGridInviteResourceKind) {
     isWorkspace: kind === 'workspace',
     isTeamSite: kind === 'team site'
   };
+}
+
+const ResourceName = StringUnion('org', 'ws', 'doc');
+type ResourceName = typeof ResourceName.type;
+
+function getResourceName(resource: Organization|Workspace|Document): ResourceName|null {
+  if (resource instanceof Organization) {
+    return 'org';
+  } else if (resource instanceof Workspace) {
+    return 'ws';
+  } else if (resource instanceof Document) {
+    return 'doc';
+  } else {
+    return null;
+  }
 }
