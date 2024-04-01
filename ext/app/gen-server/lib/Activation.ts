@@ -1,7 +1,6 @@
-import { ApiError } from 'app/common/ApiError';
 import { HomeDBManager } from 'app/gen-server/lib/HomeDBManager';
 import { ActivationReader, addActivationMiddleware } from 'app/server/lib/ActivationReader';
-import { getUser, RequestWithLogin } from 'app/server/lib/Authorizer';
+import { RequestWithLogin } from 'app/server/lib/Authorizer';
 import { expressWrap } from 'app/server/lib/expressWrap';
 import { GristServer } from 'app/server/lib/GristServer';
 import { IBilling } from 'app/server/lib/IBilling';
@@ -36,12 +35,8 @@ export class Activation implements IBilling {
       return;
     }
 
-    app.get('/api/activation/status', expressWrap(async (req, res) => {
-      const {loginEmail} = getUser(req);
-      const defaultEmail = process.env.GRIST_DEFAULT_EMAIL;
-      if (!defaultEmail || loginEmail !== defaultEmail) {
-        throw new ApiError('Access denied', 403);
-      }
+    const requireInstallAdmin = this._gristServer.getInstallAdmin().getMiddlewareRequireAdmin();
+    app.get('/api/activation/status', requireInstallAdmin, expressWrap(async (req, res) => {
       const data = await this._getActivationStatus();
       return sendOkReply(null, res, data);
     }));
