@@ -1,16 +1,21 @@
 import type {AppModel} from 'app/client/models/AppModel';
+import {PlanSelection} from 'app/common/BillingAPI';
 import {commonUrls} from 'app/common/gristUrls';
 import {Disposable, DomArg, DomContents, IDisposableOwner} from 'grainjs';
 
-export function buildNewSiteModal(context: Disposable, options: {
-  planName: string,
-  selectedPlan?: string,
+export async function buildNewSiteModal(context: Disposable, options: {
+  appModel: AppModel,
+  plan?: PlanSelection,
   onCreate?: () => void
 }) {
   window.location.href = commonUrls.plans;
 }
 
-export function buildUpgradeModal(owner: Disposable, planName: string)  {
+export async function buildUpgradeModal(owner: Disposable, options: {
+  appModel: AppModel,
+  pickPlan?: PlanSelection,
+  reason?: 'upgrade' | 'renew',
+})  {
   window.location.href = commonUrls.plans;
 }
 
