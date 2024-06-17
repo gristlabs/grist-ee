@@ -4,6 +4,7 @@ import {ActivationModel, ActivationModelImpl} from 'app/client/models/Activation
 import {urlState} from 'app/client/models/gristUrlState';
 import * as css from 'app/client/ui/ActivationPageCss';
 import {AppHeader} from 'app/client/ui/AppHeader';
+import {DefaultActivationPage, IActivationPageCreator} from 'app/client/ui/DefaultActivationPage';
 import {createForbiddenPage} from 'app/client/ui/errorPages';
 import {leftPanelBasic} from 'app/client/ui/LeftPanelCommon';
 import {pagePanels} from 'app/client/ui/PagePanels';
@@ -13,13 +14,18 @@ import {bigPrimaryButtonLink} from 'app/client/ui2018/buttons';
 import {cssLink} from 'app/client/ui2018/links';
 import {loadingSpinner} from 'app/client/ui2018/loaders';
 import {IActivationStatus} from 'app/common/ActivationAPI';
-import {commonUrls, getPageTitleSuffix} from 'app/common/gristUrls';
+import { commonUrls, getPageTitleSuffix } from 'app/common/gristUrls';
 import {getGristConfig} from 'app/common/urlUtils';
 import {Computed, Disposable, dom, makeTestId, Observable, subscribe} from 'grainjs';
+import {isEnterpriseDeployment} from "app/client/lib/enterpriseDeploymentCheck";
 
 const testId = makeTestId('test-ap-');
 
-export class ActivationPage extends Disposable {
+export function getActivationPage(): IActivationPageCreator {
+  return isEnterpriseDeployment() ? EnterpriseActivationPage : DefaultActivationPage;
+}
+
+export class EnterpriseActivationPage extends Disposable {
   private readonly _currentPage = Computed.create(this, urlState().state, (_use, s) => s.activation);
   private _model: ActivationModel = new ActivationModelImpl(this._appModel);
 

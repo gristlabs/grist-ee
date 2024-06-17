@@ -16,16 +16,29 @@
  */
 
 import {buildActivationBanner} from 'app/client/components/ActivationBanner';
+import * as CoreBanners from 'app/client/components/CoreBanners';
 import {DocUsageBanner} from 'app/client/components/DocUsageBanner';
 import {SiteUsageBanner} from 'app/client/components/SiteUsageBanner';
 import {AppModel} from 'app/client/models/AppModel';
 import {DocPageModel} from 'app/client/models/DocPageModel';
 import {dom} from 'grainjs';
+import {createEnterpriseSpecificFunc} from "app/client/lib/enterpriseDeploymentCheck";
 
-export function buildHomeBanners(app: AppModel) {
-  return buildActivationBanner() || dom.create(SiteUsageBanner, app);
-}
+const EEBanners = {
+  buildHomeBanners(app: AppModel) {
+    return buildActivationBanner() || dom.create(SiteUsageBanner, app);
+  },
+  buildDocumentBanners(docPageModel: DocPageModel) {
+    return buildActivationBanner() || dom.create(DocUsageBanner, docPageModel);
+  }
+};
 
-export function buildDocumentBanners(docPageModel: DocPageModel) {
-  return buildActivationBanner() || dom.create(DocUsageBanner, docPageModel);
-}
+export const buildHomeBanners = createEnterpriseSpecificFunc(
+    EEBanners.buildHomeBanners,
+    CoreBanners.buildHomeBanners
+);
+
+export const buildDocumentBanners = createEnterpriseSpecificFunc(
+    EEBanners.buildDocumentBanners,
+    CoreBanners.buildDocumentBanners
+);

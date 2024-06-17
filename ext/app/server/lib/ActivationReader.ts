@@ -9,12 +9,25 @@ import * as fs from 'fs';
 import * as jwt from 'jsonwebtoken';
 import moment from 'moment';
 
-const GRIST_ACTIVATION = process.env.GRIST_ACTIVATION;
-const GRIST_ACTIVATION_FILE = process.env.GRIST_ACTIVATION_FILE;
-const TEST_ENABLE_ACTIVATION = process.env.TEST_ENABLE_ACTIVATION;
+/**
+ * Export dependencies to allow dynamic changes with unit tests.
+ * Proxy process.env to allow behaviour changes without explicitly depending on this file.
+ */
+export const Deps = {
+  get GRIST_ACTIVATION() {
+    return process.env.GRIST_ACTIVATION;
+  },
+  get GRIST_ACTIVATION_FILE() {
+    return process.env.GRIST_ACTIVATION_FILE;
+  },
+  get TEST_ENABLE_ACTIVATION() {
+    return process.env.TEST_ENABLE_ACTIVATION;
+  }
+};
 
-export const Deps = {GRIST_ACTIVATION, GRIST_ACTIVATION_FILE,
-                     TEST_ENABLE_ACTIVATION};
+// If any of the activation environment variables are set, assume the host is trying to run enterprise.
+export const isRunningEnterprise =
+    () => Deps.GRIST_ACTIVATION || Deps.GRIST_ACTIVATION_FILE || Deps.TEST_ENABLE_ACTIVATION;
 
 /**
  * Plan: when grist-ee is installed, it will show a trial period

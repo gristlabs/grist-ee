@@ -1,17 +1,13 @@
 import type {AppModel} from 'app/client/models/AppModel';
 import {PlanSelection} from 'app/common/BillingAPI';
-import {commonUrls} from 'app/common/gristUrls';
-import {Disposable, DomArg, DomContents, IDisposableOwner} from 'grainjs';
+import { commonUrls } from 'app/common/gristUrls';
+import {Disposable} from 'grainjs';
+import * as CoreTeamModals from "app/client/ui/CreateTeamModal";
+import {createEnterpriseSpecificFunc} from "app/client/lib/enterpriseDeploymentCheck";
 
-export async function buildNewSiteModal(context: Disposable, options: {
-  appModel: AppModel,
-  plan?: PlanSelection,
-  onCreate?: () => void
-}) {
-  window.location.href = commonUrls.plans;
-}
+export const buildNewSiteModal = CoreTeamModals.buildNewSiteModal;
 
-export async function buildUpgradeModal(owner: Disposable, options: {
+async function buildEnterpriseUpgradeModal(owner: Disposable, options: {
   appModel: AppModel,
   pickPlan?: PlanSelection,
   reason?: 'upgrade' | 'renew',
@@ -19,17 +15,9 @@ export async function buildUpgradeModal(owner: Disposable, options: {
   window.location.href = commonUrls.plans;
 }
 
-export function showTeamUpgradeConfirmation(owner: Disposable) {
-}
+export const buildUpgradeModal = createEnterpriseSpecificFunc(
+    buildEnterpriseUpgradeModal,
+    CoreTeamModals.buildUpgradeModal,
+);
 
-export interface UpgradeButton  {
-  showUpgradeCard(...args: DomArg<HTMLElement>[]): DomContents;
-  showUpgradeButton(...args: DomArg<HTMLElement>[]): DomContents;
-}
-
-export function buildUpgradeButton(owner: IDisposableOwner, app: AppModel): UpgradeButton {
-  return {
-    showUpgradeCard : () => null,
-    showUpgradeButton : () => null,
-  };
-}
+export const buildUpgradeButton = CoreTeamModals.buildUpgradeButton;
