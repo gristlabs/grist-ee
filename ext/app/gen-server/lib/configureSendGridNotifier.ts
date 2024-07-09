@@ -1,4 +1,4 @@
-import {HomeDBManager} from 'app/gen-server/lib/HomeDBManager';
+import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
 import {Notifier} from 'app/gen-server/lib/Notifier';
 import {SendGridConfig} from 'app/gen-server/lib/NotifierTypes';
 import {GristServer} from 'app/server/lib/GristServer';

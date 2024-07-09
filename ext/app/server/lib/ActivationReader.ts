@@ -2,7 +2,7 @@ import { ActivationState } from 'app/common/gristUrls';
 import { Activation } from 'app/gen-server/entity/Activation';
 import { Activations } from 'app/gen-server/lib/Activations';
 import { RequestWithLogin } from 'app/server/lib/Authorizer';
-import { HomeDBManager } from 'app/gen-server/lib/HomeDBManager';
+import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { expressWrap } from 'app/server/lib/expressWrap';
 import * as express from 'express';
 import * as fs from 'fs';

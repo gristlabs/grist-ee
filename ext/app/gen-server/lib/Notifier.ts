@@ -16,7 +16,7 @@ import {
   NotifierEvents,
   UserChange,
   UserIdDelta
-} from 'app/gen-server/lib/HomeDBManager';
+} from 'app/gen-server/lib/homedb/HomeDBManager';
 import {
   SendGridAddress, SendGridBillingTemplate,
   SendGridConfig, SendGridContact,

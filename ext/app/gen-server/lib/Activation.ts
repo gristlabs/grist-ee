@@ -1,4 +1,4 @@
-import { HomeDBManager } from 'app/gen-server/lib/HomeDBManager';
+import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { ActivationReader, addActivationMiddleware } from 'app/server/lib/ActivationReader';
 import { RequestWithLogin } from 'app/server/lib/Authorizer';
 import { expressWrap } from 'app/server/lib/expressWrap';
