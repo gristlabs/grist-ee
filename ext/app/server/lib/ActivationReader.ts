@@ -4,6 +4,8 @@ import { Activations } from 'app/gen-server/lib/Activations';
 import { RequestWithLogin } from 'app/server/lib/Authorizer';
 import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { expressWrap } from 'app/server/lib/expressWrap';
+import { getGlobalConfig } from 'app/server/lib/globalConfig';
+import { isAffirmative } from 'app/common/gutil';
 import * as express from 'express';
 import * as fs from 'fs';
 import * as jwt from 'jsonwebtoken';
@@ -22,12 +24,23 @@ export const Deps = {
   },
   get TEST_ENABLE_ACTIVATION() {
     return process.env.TEST_ENABLE_ACTIVATION;
+  },
+  get GRIST_CONFIG_IS_ENTERPRISE() {
+    return getGlobalConfig().edition.get() === 'enterprise';
   }
 };
 
-// If any of the activation environment variables are set, assume the host is trying to run enterprise.
-export const isRunningEnterprise =
-    () => Deps.GRIST_ACTIVATION || Deps.GRIST_ACTIVATION_FILE || Deps.TEST_ENABLE_ACTIVATION;
+export const isRunningEnterprise = () => {
+  if (Deps.TEST_ENABLE_ACTIVATION !== undefined) {
+    const enabledByEnv = isAffirmative(Deps.TEST_ENABLE_ACTIVATION);
+    if (enabledByEnv !== Deps.GRIST_CONFIG_IS_ENTERPRISE) {
+      throw new Error('Inconsistent Enterprise activation: the config.json file ' +
+        'and the TEST_ENABLE_ACTIVATION environment variable do not match.');
+    }
+    return enabledByEnv;
+  }
+  return Deps.GRIST_CONFIG_IS_ENTERPRISE;
+};
 
 /**
  * Plan: when grist-ee is installed, it will show a trial period
