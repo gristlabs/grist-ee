@@ -109,6 +109,13 @@ export class ActivationReader {
   public async initialize() {
     const activations = new Activations(this._db);
     const activation = await activations.current();
+
+    if (activation.enabledAt === null) {
+      // Set the first time this Enterprise code is enabled
+      activation.enabledAt = new Date();
+      await activation.save();
+    }
+
     const text = this._readActivationText();
     if (text && text !== activation.key) {
       activation.key = text;
@@ -143,7 +150,7 @@ export class ActivationReader {
     }
     if (!state.key) {
       const trialStart = moment(this._activation.createdAt);
-      const daysSinceTrialStart = now.diff(moment(this._activation.createdAt), 'days');
+      const daysSinceTrialStart = now.diff(moment(this._activation.enabledAt), 'days');
       if (daysSinceTrialStart < TRIAL_PERIOD) {
         state.trial = {
           days: TRIAL_PERIOD,
