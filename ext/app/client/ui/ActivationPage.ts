@@ -25,6 +25,10 @@ export function getActivationPage(): IActivationPageCreator {
   return isEnterpriseDeployment() ? EnterpriseActivationPage : DefaultActivationPage;
 }
 
+export function showEnterpriseToggle() {
+  return !getGristConfig().forceEnableEnterprise;
+}
+
 export class EnterpriseActivationPage extends Disposable {
   private readonly _currentPage = Computed.create(this, urlState().state, (_use, s) => s.activation);
   private _model: ActivationModel = new ActivationModelImpl(this._appModel);
