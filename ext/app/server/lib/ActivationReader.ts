@@ -22,8 +22,8 @@ export const Deps = {
   get GRIST_ACTIVATION_FILE() {
     return process.env.GRIST_ACTIVATION_FILE;
   },
-  get TEST_ENABLE_ACTIVATION() {
-    return process.env.TEST_ENABLE_ACTIVATION;
+  get GRIST_FORCE_ENABLE_ENTERPRISE() {
+    return process.env.GRIST_FORCE_ENABLE_ENTERPRISE;
   },
   get GRIST_CONFIG_IS_ENTERPRISE() {
     return getGlobalConfig().edition.get() === 'enterprise';
@@ -31,11 +31,11 @@ export const Deps = {
 };
 
 export const isRunningEnterprise = () => {
-  if (Deps.TEST_ENABLE_ACTIVATION !== undefined) {
-    const enabledByEnv = isAffirmative(Deps.TEST_ENABLE_ACTIVATION);
+  if (Deps.GRIST_FORCE_ENABLE_ENTERPRISE !== undefined) {
+    const enabledByEnv = isAffirmative(Deps.GRIST_FORCE_ENABLE_ENTERPRISE);
     if (enabledByEnv !== Deps.GRIST_CONFIG_IS_ENTERPRISE) {
       throw new Error('Inconsistent Enterprise activation: the config.json file ' +
-        'and the TEST_ENABLE_ACTIVATION environment variable do not match.');
+        'and the GRIST_FORCE_ENABLE_ENTERPRISE environment variable do not match.');
     }
     return enabledByEnv;
   }
@@ -213,7 +213,7 @@ export async function addActivationMiddleware(db: HomeDBManager, app: express.Ex
   const reader = new ActivationReader(db);
   await reader.initialize();
   app.use(expressWrap(async (req, res, next) => {
-    if (options?.skipActivationCheck && !Deps.TEST_ENABLE_ACTIVATION) {
+    if (options?.skipActivationCheck && !Deps.GRIST_FORCE_ENABLE_ENTERPRISE) {
       return next();
     }
     const mreq = req as RequestWithLogin;
