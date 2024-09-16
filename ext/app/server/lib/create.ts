@@ -1,6 +1,8 @@
 import { Activation } from 'app/gen-server/lib/Activation';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
 import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/server/lib/configureAzureExternalStorage';
+import { checkGristAuditLogger, configureGristAuditLogger } from 'app/server/lib/configureGristAuditLogger';
+import { checkHECAuditLogger, configureHECAuditLogger } from 'app/server/lib/configureHECAuditLogger';
 import { checkMinIOExternalStorage, configureMinIOExternalStorage } from 'app/server/lib/configureMinIOExternalStorage';
 import { checkS3ExternalStorage, configureS3ExternalStorage } from 'app/server/lib/configureS3ExternalStorage';
 import { ICreate, makeSimpleCreator } from 'app/server/lib/ICreate';
@@ -32,6 +34,18 @@ export const makeEnterpriseCreator = () => makeSimpleCreator({
   notifier: {
     create: configureSendGridNotifier,
   },
+  auditLogger: [
+    {
+      name: 'grist',
+      check: () => checkGristAuditLogger() !== undefined,
+      create: configureGristAuditLogger,
+    },
+    {
+      name: 'hec',
+      check: () => checkHECAuditLogger() !== undefined,
+      create: configureHECAuditLogger,
+    },
+  ],
 });
 
 export const create = isRunningEnterprise() ? makeEnterpriseCreator() : makeCoreCreator();
