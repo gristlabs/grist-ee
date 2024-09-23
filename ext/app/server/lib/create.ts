@@ -8,6 +8,7 @@ import { checkS3ExternalStorage, configureS3ExternalStorage } from 'app/server/l
 import { ICreate, makeSimpleCreator } from 'app/server/lib/ICreate';
 import { isRunningEnterprise } from 'app/server/lib/ActivationReader';
 import { makeCoreCreator } from 'app/server/lib/coreCreator';
+import { getLoginSystem } from "app/server/lib/logins";
 
 export const makeEnterpriseCreator = () => makeSimpleCreator({
   deploymentType: 'enterprise',
@@ -46,6 +47,7 @@ export const makeEnterpriseCreator = () => makeSimpleCreator({
       create: configureHECAuditLogger,
     },
   ],
+  getLoginSystem,
 });
 
 export const create = isRunningEnterprise() ? makeEnterpriseCreator() : makeCoreCreator();

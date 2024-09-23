@@ -1,13 +1,11 @@
+import {createEnterpriseSpecificFunc} from 'app/client/lib/enterpriseDeploymentCheck';
 import type {AppModel} from 'app/client/models/AppModel';
+import {buildUpgradeModal as buildCoreUpgradeModal} from 'app/client/ui/CreateTeamModal';
 import {PlanSelection} from 'app/common/BillingAPI';
-import { commonUrls } from 'app/common/gristUrls';
+import {commonUrls} from 'app/common/gristUrls';
 import {Disposable} from 'grainjs';
-import * as CoreTeamModals from "app/client/ui/CreateTeamModal";
-import {createEnterpriseSpecificFunc} from "app/client/lib/enterpriseDeploymentCheck";
 
-export const buildNewSiteModal = CoreTeamModals.buildNewSiteModal;
-
-async function buildEnterpriseUpgradeModal(owner: Disposable, options: {
+async function buildEnterpriseUpgradeModal(_owner: Disposable, _options: {
   appModel: AppModel,
   pickPlan?: PlanSelection,
   reason?: 'upgrade' | 'renew',
@@ -16,8 +14,8 @@ async function buildEnterpriseUpgradeModal(owner: Disposable, options: {
 }
 
 export const buildUpgradeModal = createEnterpriseSpecificFunc(
-    buildEnterpriseUpgradeModal,
-    CoreTeamModals.buildUpgradeModal,
+  buildEnterpriseUpgradeModal,
+  buildCoreUpgradeModal
 );
 
-export const buildUpgradeButton = CoreTeamModals.buildUpgradeButton;
+export {buildNewSiteModal, UpgradeButton} from 'app/client/ui/CreateTeamModal';
