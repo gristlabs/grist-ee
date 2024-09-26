@@ -1,11 +1,12 @@
+import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
 import {appSettings} from 'app/server/lib/AppSettings';
 import {HECAuditLogger} from 'app/server/lib/HECAuditLogger';
 
-export function configureHECAuditLogger() {
+export function configureHECAuditLogger(db: HomeDBManager) {
   const options = checkHECAuditLogger();
   if (!options) { return undefined; }
 
-  return new HECAuditLogger(options);
+  return new HECAuditLogger(db, options);
 }
 
 export function checkHECAuditLogger() {
