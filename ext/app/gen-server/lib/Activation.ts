@@ -37,7 +37,7 @@ export class Activation implements IBilling {
 
     const requireInstallAdmin = this._gristServer.getInstallAdmin().getMiddlewareRequireAdmin();
     app.get('/api/activation/status', requireInstallAdmin, expressWrap(async (req, res) => {
-      const data = await this._getActivationStatus();
+      const data = this.getActivationStatus();
       return sendOkReply(null, res, data);
     }));
   }
@@ -63,10 +63,13 @@ export class Activation implements IBilling {
   }
 
   public async addMiddleware(app: express.Express) {
-    await addActivationMiddleware(this._dbManager, app);
+    await addActivationMiddleware({
+      server: this._gristServer,
+      app,
+    });
   }
 
-  private async _getActivationStatus() {
+  public getActivationStatus() {
     const {key, trial, needKey} = this._activationReader.check();
     return {
       inGoodStanding: !needKey,

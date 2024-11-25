@@ -1,11 +1,12 @@
 import { ActivationState } from 'app/common/gristUrls';
+import { isAffirmative } from 'app/common/gutil';
 import { Activation } from 'app/gen-server/entity/Activation';
 import { Activations } from 'app/gen-server/lib/Activations';
 import { RequestWithLogin } from 'app/server/lib/Authorizer';
 import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { expressWrap } from 'app/server/lib/expressWrap';
 import { getGlobalConfig } from 'app/server/lib/globalConfig';
-import { isAffirmative } from 'app/common/gutil';
+import { GristServer } from 'app/server/lib/GristServer';
 import * as express from 'express';
 import * as fs from 'fs';
 import * as jwt from 'jsonwebtoken';
@@ -207,19 +208,22 @@ export function readActivation(signed: string): ActivationContent {
  * Add express middleware to insert an "activation" field with the current
  * state of activation.
  */
-export async function addActivationMiddleware(db: HomeDBManager, app: express.Express, options?: {
-  skipActivationCheck: boolean
+export async function addActivationMiddleware(options: {
+  server: GristServer;
+  app: express.Express;
+  skipActivationCheck?: boolean;
 }) {
-  const reader = new ActivationReader(db);
+  const { server, app, skipActivationCheck } = options;
+  const reader = new ActivationReader(server.getHomeDBManager());
   await reader.initialize();
   app.use(expressWrap(async (req, res, next) => {
-    if (options?.skipActivationCheck && !Deps.GRIST_FORCE_ENABLE_ENTERPRISE) {
+    if (skipActivationCheck && !Deps.GRIST_FORCE_ENABLE_ENTERPRISE) {
       return next();
     }
     const mreq = req as RequestWithLogin;
     const activationState = reader.check();
     mreq.activation = activationState;
-    db.setRestrictedMode(Boolean(activationState.needKey));
+    server.setRestrictedMode(Boolean(activationState.needKey));
     next();
   }));
 }

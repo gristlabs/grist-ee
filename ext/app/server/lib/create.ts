@@ -1,11 +1,9 @@
 import { Activation } from 'app/gen-server/lib/Activation';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
-import { GenericEventFormatter } from 'app/server/lib/AuditEventFormatter';
-import { AuditLogger } from 'app/server/lib/AuditLogger';
 import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/server/lib/configureAzureExternalStorage';
+import { configureEnterpriseAuditLogger } from 'app/server/lib/configureEnterpriseAuditLogger';
 import { checkMinIOExternalStorage, configureMinIOExternalStorage } from 'app/server/lib/configureMinIOExternalStorage';
 import { checkS3ExternalStorage, configureS3ExternalStorage } from 'app/server/lib/configureS3ExternalStorage';
-import { HECEventFormatter } from 'app/server/lib/HECEventFormatter';
 import { ICreate, makeSimpleCreator } from 'app/server/lib/ICreate';
 import { isRunningEnterprise } from 'app/server/lib/ActivationReader';
 import { makeCoreCreator } from 'app/server/lib/coreCreator';
@@ -37,10 +35,7 @@ export const makeEnterpriseCreator = () => makeSimpleCreator({
     create: configureSendGridNotifier,
   },
   auditLogger: {
-    create: (dbManager) =>
-      new AuditLogger(dbManager, {
-        formatters: [new HECEventFormatter(), new GenericEventFormatter()],
-      }),
+    create: configureEnterpriseAuditLogger,
   },
   getLoginSystem,
 });
