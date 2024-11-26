@@ -1,7 +1,11 @@
 import { AuditLogStreamingDestinationName } from "app/common/Config";
 import { AuditEvent } from "app/server/lib/AuditEvent";
-import { AuditEventFormatter } from "app/server/lib/AuditEventFormatter";
 import moment from "moment-timezone";
+
+export interface AuditEventFormatter {
+  streamingDestinations: AuditLogStreamingDestinationName[];
+  formatEvent(event: AuditEvent): any;
+}
 
 export class HECEventFormatter implements AuditEventFormatter {
   public streamingDestinations: AuditLogStreamingDestinationName[] = ["splunk"];
@@ -16,5 +20,13 @@ export class HECEventFormatter implements AuditEventFormatter {
       time,
       event,
     };
+  }
+}
+
+export class GenericEventFormatter implements AuditEventFormatter {
+  public streamingDestinations: AuditLogStreamingDestinationName[] = ["other"];
+
+  public formatEvent(event: AuditEvent) {
+    return event;
   }
 }
