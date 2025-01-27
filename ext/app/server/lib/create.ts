@@ -4,44 +4,50 @@ import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/se
 import { configureEnterpriseAuditLogger } from 'app/server/lib/configureEnterpriseAuditLogger';
 import { checkMinIOExternalStorage, configureMinIOExternalStorage } from 'app/server/lib/configureMinIOExternalStorage';
 import { checkS3ExternalStorage, configureS3ExternalStorage } from 'app/server/lib/configureS3ExternalStorage';
-import { ICreate, makeSimpleCreator } from 'app/server/lib/ICreate';
+import { IBilling } from 'app/server/lib/IBilling';
+import { BaseCreate, ICreate, ICreateStorageOptions } from 'app/server/lib/ICreate';
 import { isRunningEnterprise } from 'app/server/lib/ActivationReader';
-import { makeCoreCreator } from 'app/server/lib/coreCreator';
+import { CoreCreate } from 'app/server/lib/coreCreator';
 import { getLoginSystem } from "app/server/lib/logins";
+import {EmptyNotifier, INotifier} from 'app/server/lib/INotifier';
+import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
+import {GristLoginSystem, GristServer} from 'app/server/lib/GristServer';
 
-export const makeEnterpriseCreator = () => makeSimpleCreator({
-  deploymentType: 'enterprise',
-  storage: [
-    {
-      name: 'azure',
-      check: () => checkAzureExternalStorage() !== undefined,
-      create: configureAzureExternalStorage,
-    },
-    {
-      name: 's3',
-      check: () => checkS3ExternalStorage() !== undefined,
-      create: configureS3ExternalStorage,
-    },
-    {
-      name: 'minio',
-      check: () => checkMinIOExternalStorage() !== undefined,
-      create: configureMinIOExternalStorage,
-    },
-  ],
-  billing: {
-    create: (dbManager, gristConfig) => new Activation(dbManager, gristConfig),
-  },
-  notifier: {
-    create: configureSendGridNotifier,
-  },
-  auditLogger: {
-    create: configureEnterpriseAuditLogger,
-  },
-  getLoginSystem,
-});
 
-export const create = isRunningEnterprise() ? makeEnterpriseCreator() : makeCoreCreator();
+class EnterpriseCreate extends BaseCreate {
+  constructor() {
+    const storage: ICreateStorageOptions[] = [
+      {
+        name: 'azure',
+        check: () => checkAzureExternalStorage() !== undefined,
+        create: configureAzureExternalStorage,
+      },
+      {
+        name: 's3',
+        check: () => checkS3ExternalStorage() !== undefined,
+        create: configureS3ExternalStorage,
+      },
+      {
+        name: 'minio',
+        check: () => checkMinIOExternalStorage() !== undefined,
+        create: configureMinIOExternalStorage,
+      },
+    ];
+    super('enterprise', storage);
+  }
 
-export function getCreator(): ICreate {
-  return create;
+  public override Billing(dbManager: HomeDBManager, gristServer: GristServer): IBilling {
+    return new Activation(dbManager, gristServer);
+  }
+  public override Notifier(dbManager: HomeDBManager, gristServer: GristServer): INotifier {
+    return configureSendGridNotifier(dbManager, gristServer) || EmptyNotifier;
+  }
+  public override AuditLogger(dbManager: HomeDBManager, gristServer: GristServer) {
+    return configureEnterpriseAuditLogger(dbManager, gristServer);
+  }
+  public override getLoginSystem(): Promise<GristLoginSystem> {
+    return getLoginSystem();
+  }
 }
+
+export const create: ICreate = isRunningEnterprise() ? new EnterpriseCreate() : new CoreCreate();
