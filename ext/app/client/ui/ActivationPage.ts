@@ -13,20 +13,17 @@ import {cssBreadcrumbs, separator} from 'app/client/ui2018/breadcrumbs';
 import {bigPrimaryButtonLink} from 'app/client/ui2018/buttons';
 import {cssLink} from 'app/client/ui2018/links';
 import {loadingSpinner} from 'app/client/ui2018/loaders';
-import {IActivationStatus} from 'app/common/ActivationAPI';
+import {ActivationStatus} from 'app/common/ActivationAPI';
 import { commonUrls, getPageTitleSuffix } from 'app/common/gristUrls';
 import {getGristConfig} from 'app/common/urlUtils';
 import {Computed, Disposable, dom, makeTestId, Observable, subscribe} from 'grainjs';
 import {isEnterpriseDeployment} from "app/client/lib/enterpriseDeploymentCheck";
+import {markdown} from 'app/client/lib/markdown';
 
 const testId = makeTestId('test-ap-');
 
 export function getActivationPage(): IActivationPageCreator {
   return isEnterpriseDeployment() ? EnterpriseActivationPage : DefaultActivationPage;
-}
-
-export function showEnterpriseToggle() {
-  return !getGristConfig().forceEnableEnterprise;
 }
 
 export class EnterpriseActivationPage extends Disposable {
@@ -90,14 +87,25 @@ export class EnterpriseActivationPage extends Disposable {
   private _buildActivationSummary() {
     return dom.domComputed(this._model.activationStatus, status => {
       if (!status) {
-        return css.spinnerBox(loadingSpinner());
+        return css.spinnerBox(
+          loadingSpinner(),
+          testId('loading'),
+        );
       }
 
       return [
         css.summaryRow(
+          testId('summary'),
           css.summaryRowHeader('Status'),
           css.planStatusContainer(getPlanStatusDom(status)),
         ),
+        status.features?.installationSeats ? [
+          css.summaryRow(
+            testId('seats'),
+            css.summaryRowHeader('Members'),
+            css.planStatusContainer(getSeatsDom(status)),
+          ),
+        ] : null,
         css.summaryButtons(
           bigPrimaryButtonLink('Contact Us', {
             href: commonUrls.contact,
@@ -121,34 +129,58 @@ export class EnterpriseActivationPage extends Disposable {
   }
 }
 
-function getPlanStatusDom(status: IActivationStatus) {
+function getPlanStatusDom(status: ActivationStatus) {
   // TODO: 'Enterprise Plan' is a short-term placeholder; at some point we should
   // pull the plan name/details from the `status` (or some other source).
-  const planName = css.planName(status.isInTrial ? 'Trial' : 'Enterprise Plan');
-  const {inGoodStanding, isInTrial} = status;
-  const expirationDate = getFormattedDate(status.expirationDate);
+  const planName = css.planName(status.trial ? 'Trial' : 'Enterprise Plan');
+  const inGoodStanding = !status.needKey;
+  const isInTrial = Boolean(status.trial && status.trial.daysLeft > 0 && !status.key);
+  const expirationDate = status.key?.expirationDate ?? status.trial?.expirationDate;
+  const exceeded = status.key?.daysLeft && status.key?.daysLeft > 0 && !inGoodStanding;
 
   let content: HTMLElement[];
   if (!inGoodStanding) {
     content = [
-      css.planStatusText(planName, ' ended'),
+      css.planStatusText(planName, exceeded ? ' exceeded' : ' ended'),
       css.planStatusIcon('CrossSmall', css.planStatusIcon.cls('-invalid')),
     ];
   } else if (isInTrial) {
     content = [
-      css.planStatusText(planName, ' until ', css.expirationDate(expirationDate))
+      css.planStatusText(planName, ' until ', css.expirationDate(getFormattedDate(expirationDate)))
     ];
   } else {
     content = [
-      css.planStatusText(planName, ' active until ', css.expirationDate(expirationDate)),
+      expirationDate
+        ? css.planStatusText(planName, ' active until ', css.expirationDate(getFormattedDate(expirationDate)))
+        : css.planStatusText(planName, ' active'),
       css.planStatusIcon('Tick', css.planStatusIcon.cls('-valid')),
     ];
   }
 
+  return css.planStatus(...content, testId('status-text'));
+}
+
+
+
+function getSeatsDom(status: ActivationStatus) {
+  const max = status.features?.installationSeats;
+  if (max === undefined) { return null; }
+  const current = status.current?.installationSeats || 0;
+  const valid = current <= max;
+
+  const content = [
+    // Write down how many user we have currently and how many we can have
+    css.planStatusText(css.cssLine(
+      markdown(`**${current}** of **${max}** seats used`),
+      testId('seats-text'),
+    )),
+    css.planStatusIcon(valid ? 'Tick' : 'CrossSmall', css.planStatusIcon.cls(valid ? '-valid' : '-invalid')),
+  ];
+
   return css.planStatus(...content);
 }
 
-function getFormattedDate(date: string | null): string | null {
+function getFormattedDate(date: string | null | undefined): string | null {
   if (!date) { return null; }
 
   return new Date(date).toLocaleDateString('default', {

@@ -1,10 +1,10 @@
 import {AppModel, getHomeUrl} from 'app/client/models/AppModel';
-import {ActivationAPI, ActivationAPIImpl, IActivationStatus} from 'app/common/ActivationAPI';
+import {ActivationAPI, ActivationAPIImpl, ActivationStatus} from 'app/common/ActivationAPI';
 import {bundleChanges, Disposable, Observable} from 'grainjs';
 
 export interface ActivationModel {
   // Activation status (e.g. plan expiration date).
-  readonly activationStatus: Observable<IActivationStatus|null>;
+  readonly activationStatus: Observable<ActivationStatus|null>;
 
   // Indicates whether the request for activation status failed with unauthorized.
   // Initialized to false until the request is made.
@@ -19,7 +19,7 @@ export interface ActivationModel {
  */
 export class ActivationModelImpl extends Disposable implements ActivationModel {
   // Activation status (e.g. plan expiration date).
-  public readonly activationStatus: Observable<IActivationStatus|null> = Observable.create(this, null);
+  public readonly activationStatus: Observable<ActivationStatus|null> = Observable.create(this, null);
 
   // Indicates whether the request for activation status failed with unauthorized.
   // Initialized to false until the request is made.

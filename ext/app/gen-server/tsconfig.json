@@ -5,7 +5,8 @@
     "../../../app/server/**/*",
     "../../../app/gen-server/**/*",
     "../../../core/app/server/**/*",
-    "../../../core/app/gen-server/**/*"
+    "../../../core/app/gen-server/**/*",
+    "../server/lib/ActivationReader.ts"
   ],
   "references": [
     { "path": "../common" },

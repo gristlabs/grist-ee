@@ -84,6 +84,12 @@ export const planStatusText = styled('div', `
   white-space: nowrap;
 `);
 
+export const cssLine = styled('span', `
+  & p {
+    margin: 0;
+  }
+`);
+
 export const planStatusIcon = styled(icon, `
   width: 24px;
   height: 24px;

@@ -13,7 +13,7 @@ export function configureEnterpriseAuditLogger(
   return new AuditLogger(dbManager, {
     formatters: [new HECEventFormatter(), new GenericEventFormatter()],
     allowDestination: () => {
-      return gristServer.getBilling().getActivationStatus().inGoodStanding;
+      return !gristServer.isRestrictedMode();
     },
   });
 }

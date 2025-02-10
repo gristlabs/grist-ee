@@ -26,10 +26,10 @@ import {createEnterpriseSpecificFunc} from "app/client/lib/enterpriseDeploymentC
 
 const EEBanners = {
   buildHomeBanners(app: AppModel) {
-    return buildActivationBanner() || dom.create(SiteUsageBanner, app);
+    return buildActivationBanner(app) || dom.create(SiteUsageBanner, app);
   },
   buildDocumentBanners(docPageModel: DocPageModel) {
-    return buildActivationBanner() || dom.create(DocUsageBanner, docPageModel);
+    return buildActivationBanner(docPageModel.appModel) || dom.create(DocUsageBanner, docPageModel);
   }
 };
 
