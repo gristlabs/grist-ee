@@ -1,4 +1,4 @@
-Copyright (c) 2024 Grist Labs
+Copyright (c) 2025 Grist Labs
 
 Portions of this software are licensed as follows:
 

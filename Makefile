@@ -1,4 +1,5 @@
 # To run Grist:
+#   Check out gristlabs/grist-core into the core subdirectory. Then,
 #   make requirements
 #   make build
 #   GRIST_SESSION_SECRET=something make start
