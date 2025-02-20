@@ -2,7 +2,7 @@ import {ObjMetadata, ObjSnapshotWithMetadata, toExternalMetadata, toGristMetadat
 import { ExternalStorage } from 'app/server/lib/ExternalStorage';
 import S3 from 'aws-sdk/clients/s3';
 import * as fse from 'fs-extra';
-import { Readable } from 'stream';
+import * as stream from 'node:stream';
 
 /**
  * An external store implemented using S3.
@@ -41,9 +41,13 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   public async upload(key: string, fname: string, metadata?: ObjMetadata) {
-    const stream = fse.createReadStream(fname);
+    const readStream = fse.createReadStream(fname);
+    return this.uploadStream(key, readStream, metadata);
+  }
+
+  public async uploadStream(key: string, inStream: stream.Readable, metadata?: ObjMetadata) {
     const result = await this._s3.upload({
-      Bucket: this.bucket, Key: key, Body: stream,
+      Bucket: this.bucket, Key: key, Body: inStream,
       ...metadata && {Metadata: toExternalMetadata(metadata)}
     }).promise();
     // Empirically VersionId is available in result for buckets with versioning enabled.
@@ -52,7 +56,11 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   public async download(key: string, fname: string, snapshotId?: string) {
-    const stream = fse.createWriteStream(fname);
+    const writeStream = fse.createWriteStream(fname);
+    return this.downloadStream(key, writeStream, snapshotId);
+  }
+
+  public async downloadStream(key: string, outStream: stream.Writable, snapshotId?: string ) {
     return new Promise<string>((resolve, reject) => {
       // See https://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/requests-using-stream-objects.html
       // for an example of streaming data.
@@ -65,10 +73,10 @@ export class S3ExternalStorage implements ExternalStorage {
         if (statusCode < 300) {
           // For a versioned bucket, the header 'x-amz-version-id' contains a version id.
           const downloadedSnapshotId = headers['x-amz-version-id'] || '';
-          const istream = response.httpResponse.createUnbufferedStream() as Readable;
+          const istream = response.httpResponse.createUnbufferedStream() as stream.Readable;
           istream
             .on('error', reject)    // handle errors on the read stream
-            .pipe(stream)
+            .pipe(outStream)
             .on('error', reject)    // handle errors on the write stream
             .on('finish', () => resolve(downloadedSnapshotId));
         }
@@ -82,6 +90,10 @@ export class S3ExternalStorage implements ExternalStorage {
     } else {
       await this._deleteAllVersions(key);
     }
+  }
+
+  public async removeAllWithPrefix(prefix: string) {
+    await this._deleteAllVersions(prefix, { prefixMatch: true });
   }
 
   public async versions(key: string) {
@@ -119,19 +131,24 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   // Delete all versions of an object.
-  public async _deleteAllVersions(key: string) {
+  public async _deleteAllVersions(key: string, options: {
+    prefixMatch?: boolean,  // if set, delete anything matching key as a prefix
+  } = {}) {
     let KeyMarker: string|undefined;
     let VersionIdMarker: string|undefined;
+    const keyMatch = (v: S3.ObjectVersion) => {
+      return options.prefixMatch || v.Key == key;
+    };
     for (;;) {
       const status = await this._s3.listObjectVersions({
         Bucket: this.bucket, Prefix: key, KeyMarker, VersionIdMarker,
         ...this._batchSize && {MaxKeys: this._batchSize}
       }).promise();
       if (status.Versions) {
-        await this._deleteBatch(key, status.Versions.filter(v => v.Key === key).map(v => v.VersionId));
+        await this._deleteBatch(key, status.Versions.filter(keyMatch).map(v => v.VersionId));
       }
       if (status.DeleteMarkers) {
-        await this._deleteBatch(key, status.DeleteMarkers.filter(v => v.Key === key).map(v => v.VersionId));
+        await this._deleteBatch(key, status.DeleteMarkers.filter(keyMatch).map(v => v.VersionId));
       }
       if (!status.IsTruncated) { break; }   // we are done!
       KeyMarker = status.NextKeyMarker;

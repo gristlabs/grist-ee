@@ -2,7 +2,7 @@ import {appSettings} from 'app/server/lib/AppSettings';
 import {wrapWithKeyMappedStorage} from 'app/server/lib/ExternalStorage';
 import {S3ExternalStorage} from 'app/server/lib/S3ExternalStorage';
 
-export function configureS3ExternalStorage(purpose: 'doc'|'meta', extraPrefix: string) {
+export function configureS3ExternalStorage(purpose: 'doc'|'meta'|'attachments', extraPrefix: string) {
   // Check S3 configuration.
   // We choose to use the same bucket for document and meta storage, but that
   // could change in future.
