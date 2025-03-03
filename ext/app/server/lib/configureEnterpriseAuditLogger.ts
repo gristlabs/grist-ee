@@ -12,8 +12,11 @@ export function configureEnterpriseAuditLogger(
 ) {
   return new AuditLogger(dbManager, {
     formatters: [new HECEventFormatter(), new GenericEventFormatter()],
-    allowDestination: () => {
+    allowDestination() {
       return !gristServer.isRestrictedMode();
     },
+    subscribe(callback) {
+      gristServer.onStreamingDestinationsChange(callback);
+    }
   });
 }

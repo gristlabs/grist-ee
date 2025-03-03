@@ -1,10 +1,8 @@
 import {normalizeEmail} from 'app/common/emails';
-import {isFreePlan} from 'app/common/Features';
-import {encodeUrl, GristLoadConfig, IGristUrlState} from 'app/common/gristUrls';
+import {GristLoadConfig} from 'app/common/gristUrls';
 import {isNonNullish} from 'app/common/gutil';
 import {FullUser} from 'app/common/LoginSessionAPI';
 import * as roles from 'app/common/roles';
-import {StringUnion} from 'app/common/StringUnion';
 import {BillingAccount} from 'app/gen-server/entity/BillingAccount';
 import {Document} from 'app/gen-server/entity/Document';
 import {Organization} from 'app/gen-server/entity/Organization';
@@ -18,21 +16,20 @@ import {
   UserIdDelta
 } from 'app/gen-server/lib/homedb/HomeDBManager';
 import {
-  SendGridAddress, SendGridBillingTemplate,
-  SendGridConfig, SendGridContact,
-  SendGridInviteResourceKind, SendGridInviteTemplate,
-  SendGridMail, SendGridMemberChangeTemplate, SendGridPersonalization,
-  SendGridSearchHit, SendGridSearchResult, SendGridSearchResultVariant,
+  SendGridConfig,
+  SendGridMail,
+  SendGridMailWithTemplateId,
   TwoFactorEvent
 } from 'app/gen-server/lib/NotifierTypes';
+import {
+  SendGridContact,
+  SendGridSearchHit, SendGridSearchResult, SendGridSearchResultVariant
+} from 'app/gen-server/lib/SendGridTypes';
 import {GristServer} from 'app/server/lib/GristServer';
-import {INotifier} from 'app/server/lib/INotifier';
+import {BaseNotifier, INotifier} from 'app/server/lib/INotifier';
 import log from 'app/server/lib/log';
-import flatten = require('lodash/flatten');
-import pick = require('lodash/pick');
-import sortBy = require('lodash/sortBy');
-import upperFirst = require('lodash/upperFirst');
-import moment from 'moment';
+import { Mailer, NotifierTools } from 'app/gen-server/lib/NotifierTools';
+import EventEmitter from 'events';
 import fetch from 'node-fetch';
 
 export const SENDGRID_API_CONFIG = {
@@ -53,19 +50,19 @@ export const SENDGRID_API_CONFIG = {
 
 // TODO: move all sendgrid interactions to a queue.
 
-export type NotifierSendMessageCallback = (body: SendGridMail, description: string) => Promise<void>;
+export type NotifierSendMessageCallback = (body: SendGridMailWithTemplateId, description: string) => Promise<void>;
 
 /**
  * A notifier that sends no messages, and is sufficient only for unsubscribing/removing a user.
  */
-export class UnsubscribeNotifier implements INotifier {
+export class UnsubscribeNotifier extends BaseNotifier {
   protected _testSendMessageCallback?: NotifierSendMessageCallback;
-  private _testPendingNotifications: number = 0;  // for test purposes, track notification in progress
 
   public constructor(protected _dbManager: HomeDBManager, protected _sendgridConfig: SendGridConfig) {
+    super();
   }
 
-  public async deleteUser(userId: number) {
+  public override async deleteUser(userId: number) {
     if (!this._getKey()) {
       log.warn(`API key not set, cannot delete user ${userId} from sendgrid`);
       return;
@@ -108,14 +105,16 @@ export class UnsubscribeNotifier implements INotifier {
     }
   }
 
-  // for test purposes, check if any notifications are in progress
-  public get testPending(): boolean {
-    return this._testPendingNotifications > 0;
+  public testSendGridExtensions() {
+    return this;
   }
 
   // for test purposes, override sendMessage
-  public testSetSendMessageCallback(op: (body: SendGridMail, description: string) => Promise<void>) {
+  public setSendMessageCallback(op: (body: SendGridMailWithTemplateId, description: string) => Promise<void>) {
     this._testSendMessageCallback = op;
+  }
+
+  public getConfig() {
     return SENDGRID_CONFIG;
   }
 
@@ -146,23 +145,6 @@ export class UnsubscribeNotifier implements INotifier {
   protected _getKey(): string | undefined {
     return process.env.SENDGRID_API_KEY;
   }
-
-  /**
-   * Small wrapper for listeners to keep _testPendingNotifications positive while
-   * there are still events to be handled.  This allows tests to wait before panicking
-   * about missing emails.
-   */
-  protected async _handleEvent(callback: () => Promise<void>) {
-    this._testPendingNotifications++;
-    try {
-      await callback();
-    } catch (e) {
-      // Catch error since as an event handler we can't return one.
-      log.error("Notifier failed:", e);
-    } finally {
-      this._testPendingNotifications--;
-    }
-  }
 }
 
 
@@ -174,20 +156,40 @@ export class UnsubscribeNotifier implements INotifier {
  */
 export class Notifier extends UnsubscribeNotifier implements INotifier {
   private _gristConfig: GristLoadConfig;
-  private _homeUrl: string;
+  private _tools: NotifierTools;
 
   public constructor(
     protected _dbManager: HomeDBManager,
-    private _gristServer: GristServer,
+    _gristServer: GristServer,
     protected _sendgridConfig: SendGridConfig,
   ) {
     super(_dbManager, _sendgridConfig);
     this._gristConfig = _gristServer.getGristConfig();
     if (!this._gristConfig.homeUrl) { throw new Error('Notifier requires a home URL'); }
-    this._homeUrl = this._gristConfig.homeUrl;
+    this._tools = new NotifierTools(
+      _gristServer,
+      _dbManager, {
+        unsubscribeGroup: this._sendgridConfig.unsubscribeGroup,
+        address: {
+          from: this._sendgridConfig.address.from,
+        }
+      }
+    );
+  }
 
+  public subscribe(emitter: EventEmitter): void {
     for (const method of NotifierEvents.values) {
-      this._dbManager.on(method, (...args) => (this[method] as any)(...args));
+      emitter.on(method, (...args) => (this[method] as any)(...args));
+    }
+  }
+
+  public async applyTemplate(templateId: string, mail: Mailer<SendGridMail>) {
+    await this._tools.runLogging(mail.logging);
+    if (mail.content) {
+      await this.sendMessage({
+        ...mail.content,
+        template_id: templateId,
+      }, mail.label);
     }
   }
 
@@ -196,7 +198,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * @param payload: body of message, in the format sendgrid expects
    * @param description: a short summary of email for use in log messages
    */
-  public async sendMessage(body: SendGridMail, description: string) {
+  public async sendMessage(body: SendGridMailWithTemplateId, description: string) {
     if (this._testSendMessageCallback) {
       return this._testSendMessageCallback(body, description);
     }
@@ -242,90 +244,14 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    */
   public async addUser(userId: number, resource: Organization|Workspace|Document,
                        delta: UserIdDelta, membersBefore: Map<roles.NonGuestRole, User[]>) {
-    return this._handleEvent(async () => {
-      const templateId = this._sendgridConfig.template.invite;
-      if (!templateId) {
-        log.debug(`sendgrid skipped: no invite template id set`);
-        return;
-      }
-      // Get ids of pre-existing users.
-      const existingUsers = flatten([...membersBefore.values()]).map(u => u.id);
-      // Set up a list of user ids that should be ignored.
-      const ignoredUsers = new Set([userId, this._dbManager.getEveryoneUserId(),
-                                    this._dbManager.getAnonymousUserId(), ...existingUsers]);
-      // Get ids of users for whom changes were requested.
-      // Ignore any changes by the current user (should not in fact be possible currently),
-      // or invitations to anonymous/everyone, or removal of users, or changes in
-      // the access level of a user who already had access.
-      const ids = Object.keys(delta)
-        .filter(id => delta[id] !== null)
-        .map(id => parseInt(id, 10))
-        .filter(id => !ignoredUsers.has(id));
-      // Get details of users for whom changes were requested, since we may need those
-      // details for sending the emails and expanding the email template.
-      const invitedUsers = await Promise.all(ids.map(id => this._dbManager.getFullUser(id)));
-      // We need to know the details of the user sending the email.
-      const host = await this._dbManager.getFullUser(userId);
-      // We'll want to send a link to the resource for which access is being granted, so
-      // we go through the steps the front-end would use to construct such a link.
-      let kind: SendGridInviteResourceKind;
-      if (resource instanceof Organization) {
-        kind = 'team site';
-      } else if (resource instanceof Workspace) {
-        kind = 'workspace';
-      } else {
-        kind = 'document';
-      }
-      const url = await this._makeInviteUrl(resource);
-      // Ok, we've gathered all the information we may need.  Time to prepare a payload
-      // to send to sendgrid.
-      const personalizations: SendGridPersonalization[] = [];
-      for (const user of sortBy(invitedUsers, 'email')) {
-        const role = delta[user.id] as string;
-        const template: SendGridInviteTemplate = {
-          user,
-          host,
-          resource: {
-            ...describeKind(kind),
-            name: resource.name,
-            url
-          },
-          access: {
-            role,
-            canEditAccess: roles.canEditAccess(role),
-            canEdit: roles.canEdit(role),
-            canView: roles.canView(role),
-          }
-        };
-        personalizations.push({
-          to: [
-            {
-              email: user.email,
-              name: user.name
-            }
-          ],
-          dynamic_template_data: template
-        });
-      }
-      const unsubscribeGroupId = this._sendgridConfig.unsubscribeGroup.invites;
-      if (unsubscribeGroupId === undefined) {
-        log.debug('sendgrid: no unsubscribe group set for invites');
-      }
-      const invite: SendGridMail = {
-        ...this._fromGristUser(host),
-        ...(unsubscribeGroupId !== undefined ? this._withUnsubscribe(unsubscribeGroupId) : {}),
-        personalizations,
-        template_id: templateId,
-      };
-      const emailedUsers = personalizations.map(p => p.to[0].email).sort();
-      if (emailedUsers.length > 0) {
-        await this.sendMessage(invite, `invite ${emailedUsers} to ${url}`);
-      }
-      for (const user of invitedUsers) {
-        // some users may need to be switched over to team onboarding list.
-        await this._updateList(user);
-      }
-    });
+    const templateId = this._getTemplateId('invite');
+    if (!templateId) { return; }
+    const mail = await this._tools.addUser(userId, resource, delta, membersBefore);
+    await this.applyTemplate(templateId, mail);
+    for (const user of mail.invitedUsers || []) {
+      // some users may need to be switched over to team onboarding list.
+      await this._updateList(user);
+    }
   }
 
   /**
@@ -333,58 +259,10 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * /billing/managers endpoint.
    */
   public async addBillingManager(hostUserId: number, addUserId: number, orgs: Organization[]) {
-    return this._handleEvent(async () => {
-      const templateId = this._sendgridConfig.template.billingManagerInvite;
-      if (!templateId) {
-        log.debug(`sendgrid skipped: no billingManagerInvite template id set`);
-        return;
-      }
-      if (orgs.length === 0) { return; }
-      if (orgs.length !== 1) { throw new Error('cannot deal with multi-org plans'); }
-      const org = orgs[0];
-      const host = await this._dbManager.getFullUser(hostUserId);
-      const user = await this._dbManager.getFullUser(addUserId);
-      const state: IGristUrlState = {};
-      state.org = this._dbManager.normalizeOrgDomain(org.id, org.domain, org.ownerId);
-      state.billing = 'billing';
-      const url = encodeUrl(this._gristConfig, state, new URL(this._homeUrl));
-      const kind = 'team site';
-      const template: SendGridInviteTemplate = {
-        user,
-        host,
-        resource: {
-          ...describeKind(kind),
-          name: org.name,
-          url
-        },
-        access: {
-          role: 'billing',
-          canManageBilling: true
-        }
-      };
-      const personalizations = [{
-        to: [
-          {
-            email: user.email,
-            name: user.name
-          }
-        ],
-        dynamic_template_data: template
-      }];
-      const unsubscribeGroupId = this._sendgridConfig.unsubscribeGroup.invites;
-      if (unsubscribeGroupId === undefined) {
-        log.debug('sendgrid: no unsubscribe group set for invites');
-      }
-      const invite: SendGridMail = {
-        ...this._fromGristUser(host),
-        // unsubscribe group to use is a bit ambiguous - going for invites since eventually
-        // user may need to accept invite prior to being actively a billing manager.
-        ...(unsubscribeGroupId !== undefined ? this._withUnsubscribe(unsubscribeGroupId) : {}),
-        personalizations,
-        template_id: templateId,
-      };
-      await this.sendMessage(invite, `invite billing manager ${user.email} to ${url}`);
-    });
+    const templateId = this._getTemplateId('billingManagerInvite');
+    if (!templateId) { return; }
+    const mail = await this._tools.addBillingManager(hostUserId, addUserId, orgs);
+    await this.applyTemplate(templateId, mail);
   }
 
   /**
@@ -392,23 +270,19 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * We wait until this point so we have the user's name, not just email address.
    */
   public async firstLogin(user: FullUser) {
-    return this._handleEvent(async () => {
-      await this._updateList(user, true);
-    });
+    await this._updateList(user, true);
   }
 
   /**
    * Handler for teamCreator events, emitted when a user creates a team.
    */
   public async teamCreator(userId: number) {
-    return this._handleEvent(async () => {
-      const user = await this._dbManager.getFullUser(userId);
-      // Make sure user is on all the lists they merit being on, if we know their name
-      // already.
-      if (user.name) {
-        await this._updateList(user, true);
-      }
-    });
+    const user = await this._dbManager.getFullUser(userId);
+    // Make sure user is on all the lists they merit being on, if we know their name
+    // already.
+    if (user.name) {
+      await this._updateList(user, true);
+    }
   }
 
   /**
@@ -416,64 +290,10 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * removed from organization.
    */
   public async userChange(change: UserChange) {
-    return this._handleEvent(async () => {
-      const templateId = this._sendgridConfig.template.memberChange;
-      if (!templateId) {
-        log.debug(`sendgrid skipped: no memberChange template id set`);
-        return;
-      }
-      const membersBefore = flatten([...change.membersBefore.values()]);
-      const membersAfter = flatten([...change.membersAfter.values()]);
-      const idsBefore = new Set(membersBefore.map(user => user.id));
-      const idsAfter = new Set(membersAfter.map(user => user.id));
-      const membersAdded = sortBy(membersAfter.filter(user => !idsBefore.has(user.id)), 'name');
-      const membersRemoved = sortBy(membersBefore.filter(user => !idsAfter.has(user.id)), 'name');
-      if (membersAdded.length === 0 && membersRemoved.length === 0) { return; }
-
-      if (membersAdded.length > 0) {
-        this._gristServer.getTelemetry().logEvent(null, 'invitedMember', {
-          full: {
-            count: membersAdded.length,
-            siteId: change.org.id,
-          },
-        });
-      }
-      if (membersRemoved.length > 0) {
-        this._gristServer.getTelemetry().logEvent(null, 'uninvitedMember', {
-          full: {
-            count: membersRemoved.length,
-            siteId: change.org.id,
-          },
-        });
-      }
-      const added = await Promise.all(membersAdded.map(user => this._dbManager.getFullUser(user.id)));
-      const removed = await Promise.all(membersRemoved.map(user => this._dbManager.getFullUser(user.id)));
-      const initiatingUser = await this._dbManager.getFullUser(change.userId);
-      const account = await this._dbManager.getFullBillingAccount(change.org.billingAccountId);
-      const env: SendGridMemberChangeTemplate = {
-        ...this._getBillingTemplate(account),
-        added,
-        removed,
-        initiatingUser,
-        countBefore: change.countBefore,
-        countAfter: change.countAfter,
-        paidPlan: !isFreePlan(account.product.name),
-      };
-      const unsubscribeGroupId = this._sendgridConfig.unsubscribeGroup.billingManagers;
-      if (unsubscribeGroupId === undefined) {
-        log.debug('sendgrid: no unsubscribe group set for billingManagers');
-      }
-      const mail: SendGridMail = {
-        ...this._fromGrist(),
-        ...(unsubscribeGroupId !== undefined ? this._withUnsubscribe(unsubscribeGroupId) : {}),
-        personalizations: [{
-          to: this._getManagers(account).map(user => this._asSendGridAddress(user)),
-          dynamic_template_data: env
-        }],
-        template_id: templateId,
-      };
-      await this.sendMessage(mail, `memberChange for ${change.org.name}`);
-    });
+    const templateId = this._getTemplateId('memberChange');
+    if (!templateId) { return; }
+    const mail = await this._tools.userChange(change);
+    await this.applyTemplate(templateId, mail);
   }
 
   /**
@@ -484,44 +304,10 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     account: BillingAccount,
     subscription: {trial_end: number | null}
   ) {
-    await this._handleEvent(async () => {
-      const templateId = this._sendgridConfig.template.trialPeriodEndingSoon;
-      if (!templateId) {
-        log.debug(`sendgrid skipped: no trialPeriodEndingSoon template id set`);
-        return;
-      }
-      let howSoon: string|null = null;
-      if (subscription.trial_end) {
-        // howSoon will be set normally to "3 days", but if a hook is called late (or when
-        // changing trialEnd manually), could be e.g. "a day".
-        const trialEnd = new Date(subscription.trial_end * 1000);
-        howSoon = moment.duration(moment().diff(trialEnd)).humanize();
-      }
-      log.debug(`sendgrid: sending trialPeriodEndingSoon for ${account.stripeCustomerId} (${howSoon})`);
-      // Ideally, to get managers and orgs, we'd just pull in the relations above.
-      // But there's some useful cleanup done in getFullBillingAccount.
-      const fullAccount = await this._dbManager.getFullBillingAccount(account.id);
-      const unsubscribeGroupId = this._sendgridConfig.unsubscribeGroup.billingManagers;
-      if (unsubscribeGroupId === undefined) {
-        log.debug('sendgrid: no unsubscribe group set for billingManagers');
-      }
-      const mail: SendGridMail = {
-        ...this._fromGrist(),
-        ...(unsubscribeGroupId !== undefined ? this._withUnsubscribe(unsubscribeGroupId) : {}),
-        personalizations: [{
-          to: this._getManagers(fullAccount).map(user => this._asSendGridAddress(user)),
-          dynamic_template_data: {
-            ...this._getBillingTemplate(fullAccount),
-            howSoon,
-          }
-        }],
-        template_id: templateId,
-        // Notification of end of trial period is important to give people a chance
-        // to terminate their subscription or update their card information.
-        ...this._withoutUnsubscribe(),
-      };
-      await this.sendMessage(mail, `trialPeriodEndingSoon for ${fullAccount.orgs.map(o => o.name)}`);
-    });
+    const templateId = this._getTemplateId('trialPeriodEndingSoon');
+    if (!templateId) { return; }
+    const mail = await this._tools.trialPeriodEndingSoon(account, subscription);
+    await this.applyTemplate(templateId, mail);
   }
 
   /**
@@ -531,13 +317,11 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
   public async trialingSubscription(account: BillingAccount) {
     const trialListId = this._sendgridConfig.list.trial;
     if (!trialListId) { return; }
-    await this._handleEvent(async () => {
-      const fullAccount = await this._dbManager.getFullBillingAccount(account.id);
-      const managers = this._getManagers(fullAccount);
-      await Promise.all(managers.map(
-        manager => this._addOrUpdateContact(manager, {listIds: [trialListId]})
-      ));
-    });
+    const fullAccount = await this._dbManager.getFullBillingAccount(account.id);
+    const managers = this._getManagers(fullAccount);
+    await Promise.all(managers.map(
+      manager => this._addOrUpdateContact(manager, {listIds: [trialListId]})
+    ));
   }
 
   /**
@@ -545,18 +329,16 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * field in sendgrid for that user.
    */
   public async scheduledCall(userRef: string) {
-    await this._handleEvent(async () => {
-      const user = await this._dbManager.getUserByRef(userRef);
-      const fullUser = user && this._dbManager.makeFullUser(user);
-      log.debug('Notifier scheduledCall', {userRef, fullUser});
-      if (fullUser) {
-        await this._addOrUpdateContact(fullUser, {
-          customFields: {
-            callScheduled: 1,
-          },
-        });
-      }
-    });
+    const user = await this._dbManager.getUserByRef(userRef);
+    const fullUser = user && this._dbManager.makeFullUser(user);
+    log.debug('Notifier scheduledCall', {userRef, fullUser});
+    if (fullUser) {
+      await this._addOrUpdateContact(fullUser, {
+        customFields: {
+          callScheduled: 1,
+        },
+      });
+    }
   }
 
   /**
@@ -564,37 +346,21 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * for their account.
    */
   public async twoFactorStatusChanged(event: TwoFactorEvent, userId: number, method?: 'TOTP' | 'SMS') {
-    await this._handleEvent(async () => {
-      const templateId = this._sendgridConfig.template[event];
-      if (!templateId) {
-        log.error(`Notifier failed: unable to find template id for 2FA event ${event}`);
-        return;
-      }
-      const templateData = method ? {method} : {};
-      const mail = await this._buildTwoFactorEmail(userId, templateId, templateData);
-      await this.sendMessage(mail, `${event} for user ${userId}`);
-    });
+    const templateId = this._getTemplateId(event);
+    if (!templateId) { return; }
+    const mail = await this._tools.twoFactorStatusChanged(event, userId, method);
+    await this.applyTemplate(templateId, mail);
   }
 
-  /**
-   * Returns a SendGridMail object appropriate for two-factor authentication emails.
-   */
-  private async _buildTwoFactorEmail(
-    userId: number,
-    templateId: string,
-    templateData?: {[key: string]: any},
-  ): Promise<SendGridMail> {
-    const {email, name} = await this._dbManager.getFullUser(userId);
-    return {
-      ...this._fromGrist(),
-      personalizations: [{
-        to: [{email, name}],
-        dynamic_template_data: templateData ?? {},
-      }],
-      template_id: templateId,
-      ...this._withoutUnsubscribe(),
-    };
+  private _getTemplateId(type: keyof SendGridConfig['template']) {
+    const templateId = this._sendgridConfig.template[type];
+      if (!templateId) {
+        log.error(`skipped notification with no template for event: ${type}`);
+        return;
+      }
+    return templateId;
   }
+
 
   /**
    * Check what list a user should be on, and make updates if needed.
@@ -708,118 +474,10 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
   }
 
   /**
-   * Compile basic information needed by billing managers - org details, link to
-   * org, link to org billing page.
-   */
-  private _getBillingTemplate(account: BillingAccount): SendGridBillingTemplate {
-    const state: IGristUrlState = {};
-    if (account.orgs.length !== 1) { throw new Error('need exactly one org'); }
-    const org = account.orgs[0]!;
-    state.org = this._dbManager.normalizeOrgDomain(org.id, org.domain, org.ownerId);
-    const orgUrl = encodeUrl(this._gristConfig, state, new URL(this._homeUrl));
-    state.billing = 'billing';
-    const billingUrl = encodeUrl(this._gristConfig, state, new URL(this._homeUrl));
-    return {
-      org: pick(org, ['id', 'name']),
-      billingUrl,
-      orgUrl
-    };
-  }
-
-  /**
    * Compile a list of billing managers in a format compatible with SendGrid api.
    */
   private _getManagers(account: BillingAccount): FullUser[] {
     // TODO: correct typing on account managers.
     return account.managers as any[] as FullUser[];
-  }
-
-  private _asSendGridAddress(user: FullUser): SendGridAddress {
-    return pick(user, 'email', 'name');
-  }
-
-  /**
-   * Fill in the SendGrid "from" and "reply_to" fields with Grist's email.  At some
-   * point we may want to switch "reply_to" to some noreply address.
-   */
-  private _fromGrist(): Pick<SendGridMail, 'from'|'reply_to'> {
-    return {
-      from: this._sendgridConfig.address.from,
-      reply_to: this._sendgridConfig.address.from
-    };
-  }
-
-  /**
-   * Fill in the SendGrid "from" and "reply_to" fields when the sender is known, e.g.:
-   * From: "Bob (via Grist) <support@getgrist.com>"
-   * Reply-To: "Bob <bob@example.com>".
-   */
-  private _fromGristUser(sender: FullUser): Pick<SendGridMail, 'from'|'reply_to'> {
-    return {
-      from: {...this._sendgridConfig.address.from, name: `${sender.name} (via Grist)`},
-      reply_to: {email: sender.email, name: sender.name},
-    };
-  }
-
-  /**
-   * Configure which sendgrid unsubscribe group to use for an email.
-   */
-  private _withUnsubscribe(unsubscribeGroupId: number) {
-    return {
-      asm: {
-        group_id: unsubscribeGroupId
-      }
-    };
-  }
-
-  /**
-   * Send email without respecting unsubscribe settings - this should
-   * be limited to financially/technically important emails, not
-   * marketing or non-critical notifications.  See:
-   *   https://sendgrid.com/docs/API_Reference/Web_API_v3/Mail/index.html
-   */
-  private _withoutUnsubscribe() {
-    return {
-      mail_settings: {
-        bypass_list_management: {
-          enable: true
-        }
-      }
-    };
-  }
-
-  private async _makeInviteUrl(resource: Organization|Workspace|Document) {
-    const url = new URL(await this._gristServer.getResourceUrl(resource));
-    url.searchParams.set('utm_id', `invite-${getResourceName(resource)}`);
-    return url.href;
-  }
-}
-
-/**
- * Describe the kind of resource in various ways to make handlebar templates
- * easier to write.
- */
-function describeKind(kind: SendGridInviteResourceKind) {
-  return {
-    kind,
-    kindUpperFirst: upperFirst(kind),
-    isDocument: kind === 'document',
-    isWorkspace: kind === 'workspace',
-    isTeamSite: kind === 'team site'
-  };
-}
-
-const ResourceName = StringUnion('org', 'ws', 'doc');
-type ResourceName = typeof ResourceName.type;
-
-function getResourceName(resource: Organization|Workspace|Document): ResourceName|null {
-  if (resource instanceof Organization) {
-    return 'org';
-  } else if (resource instanceof Workspace) {
-    return 'ws';
-  } else if (resource instanceof Document) {
-    return 'doc';
-  } else {
-    return null;
   }
 }

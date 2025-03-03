@@ -41,6 +41,7 @@ interface AuditLoggerOptions {
     destination: AuditLogStreamingDestination,
     org: Organization | null
   ): boolean;
+  subscribe?(callback: (orgId?: number) => Promise<void>): void;
 }
 
 export class AuditLogger implements IAuditLogger {
@@ -304,7 +305,7 @@ export class AuditLogger implements IAuditLogger {
   }
 
   private _subscribeToStreamingDestinations() {
-    this._db.on("streamingDestinationsChange", async (orgId?: number) => {
+    this._options.subscribe?.(async (orgId?: number) => {
       await this._handleStreamingDestinationsChange(orgId ?? null);
     });
 

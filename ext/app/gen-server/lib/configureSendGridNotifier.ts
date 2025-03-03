@@ -40,14 +40,14 @@ export const SENDGRID_CONFIG: SendGridConfig = {
   },
 };
 
-export function configureSendGridNotifier(dbManager: HomeDBManager, gristConfig: GristServer) {
+export function configureSendGridNotifier(dbManager: HomeDBManager, gristServer: GristServer) {
   if (!process.env.SENDGRID_API_KEY) { return undefined; }
 
   /* TODO: this naughty cast is because settings is of type
    * IGristCoreConfig which doesn't have a sendgrid property. Need to
    * properly fix this later.
    */
-  const settings = gristConfig.settings as any;
+  const settings = gristServer.settings as any;
 
   /* Settings are populated from config.json (located in GRIST_INST_DIR).
    *
@@ -58,5 +58,5 @@ export function configureSendGridNotifier(dbManager: HomeDBManager, gristConfig:
   const sendgridConfig = settings?.sendgrid as SendGridConfig|undefined;
   if (!sendgridConfig) { return undefined; }
 
-  return new Notifier(dbManager, gristConfig, sendgridConfig);
+  return new Notifier(dbManager, gristServer, sendgridConfig);
 }

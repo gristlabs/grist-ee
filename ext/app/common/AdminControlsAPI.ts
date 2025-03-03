@@ -1,28 +1,33 @@
 import {BaseAPI, IOptions} from 'app/common/BaseAPI';
+import {Role} from 'app/common/roles';
 
 // The interface exposed to the client via REST API, and also implemented by AdminControls on the
 // server side.
 export interface AdminControlsAPI {
-  adminGetUsers(options: {orgid?: number, wsid?: number, docid?: string}): Promise<IUserRecords>;
-  adminGetOrgs(options: {userid?: number}): Promise<IOrgRecords>;
-  adminGetWorkspaces(options: {orgid?: number, userid?: number}): Promise<IWorkspaceRecords>;
-  adminGetDocs(options: {orgid?: number, wsid?: number, userid?: number}): Promise<IDocRecords>;
+  adminGetUsers(options: {orgid?: number, wsid?: number, docid?: string, userid?: number}): Promise<IUserRecords>;
+  adminGetOrgs(options: {orgid?: number, userid?: number}): Promise<IOrgRecords>;
+  adminGetWorkspaces(options: {orgid?: number, wsid?: number, userid?: number}): Promise<IWorkspaceRecords>;
+  adminGetDocs(options: {orgid?: number, wsid?: number, docid?: string, userid?: number}): Promise<IDocRecords>;
 }
 
 //----------------------------------------------------------------------
 // Types
 //----------------------------------------------------------------------
 
-export type IUserRecords = IRecords<number, IUserFields>;
+export type IUserRecord = IRecord<number, IUserFields>;
+export interface IUserRecords {records: IUserRecord[]}
 export interface IUserFields {
   name: string;
   email: string;
   firstLoginAtMs: number|null;        // millisecond timestamp
   lastConnectionAtMs: number|null;    // millisecond timestamp
   hasApiKey: boolean;
-  countOrgs: number;
-  countWorkspaces: number;
-  countDocs: number;
+  // Counts are not set when filtering by a particular resource.
+  countOrgs?: number;
+  countWorkspaces?: number;
+  countDocs?: number;
+  // Access is only set when filtering by a particular resource.
+  access?: Role|null;
 }
 
 export interface ResourceAccessInfo {
@@ -32,7 +37,8 @@ export interface ResourceAccessInfo {
   hasAnon?: boolean;
 }
 
-export type IOrgRecords = IRecords<number, IOrgFields>;
+export type IOrgRecord = IRecord<number, IOrgFields>;
+export interface IOrgRecords {records: IOrgRecord[]}
 export interface IOrgFields extends ResourceAccessInfo {
   name: string;
   domain: string|null;
@@ -41,9 +47,11 @@ export interface IOrgFields extends ResourceAccessInfo {
   ownerId?: number;
   countWorkspaces: number;
   countDocs: number;
+  access?: Role|null;           // Access is only set when filtering by a particular user.
 }
 
-export type IWorkspaceRecords = IRecords<number, IWorkspaceFields>;
+export type IWorkspaceRecord = IRecord<number, IWorkspaceFields>;
+export interface IWorkspaceRecords {records: IWorkspaceRecord[]}
 export interface IWorkspaceFields extends ResourceAccessInfo {
   name: string;
   createdAtMs: number;
@@ -57,9 +65,11 @@ export interface IWorkspaceFields extends ResourceAccessInfo {
   orgOwnerId?: number;
   countDocs: number;
   countExtraDocUsers: number;   // Org members with no access to this workspace, but with access to a contained doc.
+  access?: Role|null;           // Access is only set when filtering by a particular user.
 }
 
-export type IDocRecords = IRecords<string, IDocFields>;
+export type IDocRecord = IRecord<string, IDocFields>;
+export interface IDocRecords {records: IDocRecord[]}
 export interface IDocFields extends ResourceAccessInfo {
   name: string;
   createdAtMs: number;
@@ -80,13 +90,12 @@ export interface IDocFields extends ResourceAccessInfo {
   orgDomain: string|null;
   orgIsPersonal: boolean;
   orgOwnerId?: number;
+  access?: Role|null;           // Access is only set when filtering by a particular user.
 }
 
-export interface IRecords<IdType, FieldsType> {
-  records: Array<{
-    id: IdType;
-    fields: FieldsType;
-  }>;
+export interface IRecord<IdType, FieldsType> {
+  id: IdType;
+  fields: FieldsType;
 }
 
 //----------------------------------------------------------------------
@@ -101,22 +110,28 @@ export class AdminControlsAPIImpl extends BaseAPI implements AdminControlsAPI {
     this._adminUrl = `${homeUrl}/api/admin-controls`;
   }
 
-  public async adminGetUsers(options: {orgid?: number, wsid?: number, docid?: string}): Promise<IUserRecords> {
+  public async adminGetUsers(
+    options: {orgid?: number, wsid?: number, docid?: string, userid?: number}
+  ): Promise<IUserRecords> {
     const fullUrl = addParams(`${this._adminUrl}/users`, options);
     return this.requestJson(fullUrl, {method: 'GET'});
   }
 
-  public async adminGetOrgs(options: {userid?: number}): Promise<IOrgRecords> {
+  public async adminGetOrgs(options: {orgid?: number, userid?: number}): Promise<IOrgRecords> {
     const fullUrl = addParams(`${this._adminUrl}/orgs`, options);
     return this.requestJson(fullUrl, {method: 'GET'});
   }
 
-  public async adminGetWorkspaces(options: {orgid?: number, userid?: number}): Promise<IWorkspaceRecords> {
+  public async adminGetWorkspaces(
+    options: {orgid?: number, wsid?: number, userid?: number}
+  ): Promise<IWorkspaceRecords> {
     const fullUrl = addParams(`${this._adminUrl}/workspaces`, options);
     return this.requestJson(fullUrl, {method: 'GET'});
   }
 
-  public async adminGetDocs(options: {orgid?: number, wsid?: number, userid?: number}): Promise<IDocRecords> {
+  public async adminGetDocs(
+    options: {orgid?: number, wsid?: number, docid?: string, userid?: number}
+  ): Promise<IDocRecords> {
     const fullUrl = addParams(`${this._adminUrl}/docs`, options);
     return this.requestJson(fullUrl, {method: 'GET'});
   }

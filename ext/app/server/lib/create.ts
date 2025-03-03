@@ -1,5 +1,8 @@
+import { isAffirmative } from 'app/common/gutil';
 import { Activation } from 'app/gen-server/lib/Activation';
+import { addAdminControlsEndpoints } from 'app/gen-server/lib/AdminControls';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
+import { configureTestNotifier } from 'app/gen-server/lib/configureTestNotifier';
 import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/server/lib/configureAzureExternalStorage';
 import { configureEnterpriseAuditLogger } from 'app/server/lib/configureEnterpriseAuditLogger';
 import { checkMinIOExternalStorage, configureMinIOExternalStorage } from 'app/server/lib/configureMinIOExternalStorage';
@@ -12,6 +15,7 @@ import { getLoginSystem } from "app/server/lib/logins";
 import {EmptyNotifier, INotifier} from 'app/server/lib/INotifier';
 import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
 import {GristLoginSystem, GristServer} from 'app/server/lib/GristServer';
+import {Express} from 'express';
 
 
 class EnterpriseCreate extends BaseCreate {
@@ -40,13 +44,21 @@ class EnterpriseCreate extends BaseCreate {
     return new Activation(dbManager, gristServer);
   }
   public override Notifier(dbManager: HomeDBManager, gristServer: GristServer): INotifier {
-    return configureSendGridNotifier(dbManager, gristServer) || EmptyNotifier;
+    return configureTestNotifier(dbManager, gristServer) ||
+        configureSendGridNotifier(dbManager, gristServer) ||
+        EmptyNotifier;
   }
   public override AuditLogger(dbManager: HomeDBManager, gristServer: GristServer) {
     return configureEnterpriseAuditLogger(dbManager, gristServer);
   }
   public override getLoginSystem(): Promise<GristLoginSystem> {
     return getLoginSystem();
+  }
+  public override addExtraHomeEndpoints(gristServer: GristServer, app: Express): void {
+    // For now only enable for testing.
+    if (isAffirmative(process.env.GRIST_TEST_ENABLE_ADMIN_CONTROLS)) {
+      addAdminControlsEndpoints(gristServer.getHomeDBManager(), gristServer, app);
+    }
   }
 }
 
