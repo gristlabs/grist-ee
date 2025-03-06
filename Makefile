@@ -28,7 +28,7 @@ requirements:
 	cd core && yarn run install:python
 
 build:
-	cd core && yarn run build:prod
+	cd core && yarn run build
 
 start:
 	cd core && yarn start
