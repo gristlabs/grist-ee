@@ -1,5 +1,6 @@
+import {ApiError} from 'app/common/ApiError';
 import {ObjMetadata, ObjSnapshotWithMetadata, toExternalMetadata, toGristMetadata} from 'app/common/DocSnapshot';
-import { ExternalStorage } from 'app/server/lib/ExternalStorage';
+import {ExternalStorage, StreamDownloadResult} from 'app/server/lib/ExternalStorage';
 import S3 from 'aws-sdk/clients/s3';
 import * as fse from 'fs-extra';
 import * as stream from 'node:stream';
@@ -41,13 +42,15 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   public async upload(key: string, fname: string, metadata?: ObjMetadata) {
+    const stat = await fse.lstat(fname);
     const readStream = fse.createReadStream(fname);
-    return this.uploadStream(key, readStream, metadata);
+    return this.uploadStream(key, readStream, stat.size, metadata);
   }
 
-  public async uploadStream(key: string, inStream: stream.Readable, metadata?: ObjMetadata) {
+  public async uploadStream(key: string, inStream: stream.Readable, size?: number|undefined, metadata?: ObjMetadata) {
     const result = await this._s3.upload({
       Bucket: this.bucket, Key: key, Body: inStream,
+      ...size && { ContentLength: size },
       ...metadata && {Metadata: toExternalMetadata(metadata)}
     }).promise();
     // Empirically VersionId is available in result for buckets with versioning enabled.
@@ -56,12 +59,14 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   public async download(key: string, fname: string, snapshotId?: string) {
-    const writeStream = fse.createWriteStream(fname);
-    return this.downloadStream(key, writeStream, snapshotId);
+    const fileStream = fse.createWriteStream(fname);
+    const download = await this.downloadStream(key, snapshotId);
+    await stream.promises.pipeline(download.contentStream, fileStream);
+    return download.metadata.snapshotId;
   }
 
-  public async downloadStream(key: string, outStream: stream.Writable, snapshotId?: string ) {
-    return new Promise<string>((resolve, reject) => {
+  public async downloadStream(key: string, snapshotId?: string ) {
+    return new Promise<StreamDownloadResult>((resolve, reject) => {
       // See https://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/requests-using-stream-objects.html
       // for an example of streaming data.
       const request = this._s3.getObject({
@@ -73,12 +78,17 @@ export class S3ExternalStorage implements ExternalStorage {
         if (statusCode < 300) {
           // For a versioned bucket, the header 'x-amz-version-id' contains a version id.
           const downloadedSnapshotId = headers['x-amz-version-id'] || '';
-          const istream = response.httpResponse.createUnbufferedStream() as stream.Readable;
-          istream
-            .on('error', reject)    // handle errors on the read stream
-            .pipe(outStream)
-            .on('error', reject)    // handle errors on the write stream
-            .on('finish', () => resolve(downloadedSnapshotId));
+          const fileSize = Number(headers['content-length']);
+          if (Number.isNaN(fileSize)) {
+            throw new ApiError('download error - bad file size', 500);
+          }
+          resolve({
+            metadata: {
+              snapshotId: downloadedSnapshotId,
+              size: fileSize,
+            },
+            contentStream: request.createReadStream(),
+          });
         }
       }).on('error', reject).send();
     });
