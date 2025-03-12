@@ -9,6 +9,7 @@ import {
 } from 'app/common/DocSnapshot';
 import {ExternalStorage} from 'app/server/lib/ExternalStorage';
 import sortBy = require('lodash/sortBy');
+import * as stream from 'node:stream';
 
 /**
  * An external store implemented using Azure Blob Storage (similar to S3).
@@ -55,9 +56,48 @@ export class AzureExternalStorage implements ExternalStorage {
     return result.versionId || null;
   }
 
+  public async uploadStream(key: string, inStream: stream.Readable, _size?: number|undefined,
+                            metadata?: ObjMetadata): Promise<string | null> {
+    // TODO: use size if available to switch upload methods.
+    const blockBlobClient = this._blob(key);
+    const bufferSize = 4 * 1024 * 1024; // 4MB
+    const maxConcurrency = 2;
+    const result = await blockBlobClient.uploadStream(
+      inStream,
+      bufferSize,
+      maxConcurrency,
+      { metadata: metadata && toExternalMetadata(metadata) }
+    );
+    return result.versionId || null;
+  }
+
   public async download(key: string, fname: string, snapshotId?: string): Promise<string> {
     const result = await this._version(key, snapshotId).downloadToFile(fname);
     return result.versionId!;
+  }
+
+  public async downloadStream(key: string, snapshotId?: string) {
+    const blobClient = this._version(key, snapshotId);
+    const downloadResponse = await blobClient.download();
+    if (!downloadResponse.readableStreamBody) {
+      throw new Error("AzureExternalStorage.downloadStream could not get stream body");
+    }
+    if (downloadResponse.versionId === undefined ||
+        downloadResponse.contentLength === undefined) {
+      // Should not happen.
+      throw new Error("AzureExternalStorage.downloadStream did not get stream properties");
+    }
+    // Convert web ReadableStream to node Readable.
+    // The any cast seems avoidable only through hijinks that are basically
+    // the same just sound fancier.
+    const contentStream = stream.Readable.fromWeb(downloadResponse.readableStreamBody as any);
+    return {
+      metadata: {
+        snapshotId: downloadResponse.versionId,
+        size: downloadResponse.contentLength,
+      },
+      contentStream,
+    };
   }
 
   public async remove(key: string, snapshotIds?: string[]): Promise<void> {
@@ -66,6 +106,10 @@ export class AzureExternalStorage implements ExternalStorage {
     } else {
       await this._deleteAllVersions(key);
     }
+  }
+
+  public async removeAllWithPrefix(prefix: string): Promise<void> {
+    await this._deleteAllVersions(prefix, { prefixMatch: true });
   }
 
   // List content versions that exist for the given key.  More recent versions should
@@ -93,10 +137,12 @@ export class AzureExternalStorage implements ExternalStorage {
   }
 
   // Delete all versions of an object.
-  public async _deleteAllVersions(key: string) {
+  public async _deleteAllVersions(key: string, options: {
+    prefixMatch?: boolean,  // if set, delete anything matching key as a prefix
+  } = {}) {
     // Sometimes the first request doesn't actually delete everything, repeat until they're all gone.
     for (;;) {
-      const versions = this._versionsIterator(key);
+      const versions = this._versionsIterator(key, options);
       const versionsIds = await toArray(asyncMap(versions, version => version.versionId!));
       if (!versionsIds.length) {
         return;
@@ -130,8 +176,13 @@ export class AzureExternalStorage implements ExternalStorage {
     return this._blob(key).withVersion(snapshotId || "");
   }
 
-  private _versionsIterator(key: string): AsyncIterableIterator<azure.BlobItem> {
+  private _versionsIterator(key: string, options: {
+    prefixMatch?: boolean,  // if set, match with key as a prefix, rather than exact match
+  } = {}): AsyncIterableIterator<azure.BlobItem> {
+    const keyMatch = (v: azure.BlobItem) => {
+      return options.prefixMatch || v.name == key;
+    };
     const blobs = this._client.listBlobsFlat({includeVersions: true, prefix: key});
-    return asyncFilter(blobs, version => version.name === key);
+    return asyncFilter(blobs, keyMatch);
   }
 }

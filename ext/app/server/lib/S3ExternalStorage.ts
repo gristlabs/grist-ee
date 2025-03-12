@@ -1,6 +1,6 @@
 import {ApiError} from 'app/common/ApiError';
 import {ObjMetadata, ObjSnapshotWithMetadata, toExternalMetadata, toGristMetadata} from 'app/common/DocSnapshot';
-import {ExternalStorage, StreamDownloadResult} from 'app/server/lib/ExternalStorage';
+import {ExternalStorage} from 'app/server/lib/ExternalStorage';
 import S3 from 'aws-sdk/clients/s3';
 import * as fse from 'fs-extra';
 import * as stream from 'node:stream';
@@ -66,32 +66,45 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   public async downloadStream(key: string, snapshotId?: string ) {
-    return new Promise<StreamDownloadResult>((resolve, reject) => {
-      // See https://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/requests-using-stream-objects.html
-      // for an example of streaming data.
-      const request = this._s3.getObject({
-        Bucket: this.bucket, Key: key, ...snapshotId && {VersionId: snapshotId}
-      });
-      // We need to read headers before starting to stream to file, so we can catch
-      // version information.  See https://github.com/aws/aws-sdk-js/pull/345
-      request.on('httpHeaders', function(statusCode, headers, response) {
+    const request = this._s3.getObject({
+      Bucket: this.bucket, Key: key, ...snapshotId && {VersionId: snapshotId}
+    });
+    // We need to read headers before starting to stream to file, so we can catch
+    // version information.  See https://github.com/aws/aws-sdk-js/pull/345
+    const headers = await new Promise<Record<string, string>|null>((resolve, reject) => {
+      request.on('httpHeaders', function(statusCode, httpHeaders) {
         if (statusCode < 300) {
-          // For a versioned bucket, the header 'x-amz-version-id' contains a version id.
-          const downloadedSnapshotId = headers['x-amz-version-id'] || '';
-          const fileSize = Number(headers['content-length']);
-          if (Number.isNaN(fileSize)) {
-            throw new ApiError('download error - bad file size', 500);
-          }
-          resolve({
-            metadata: {
-              snapshotId: downloadedSnapshotId,
-              size: fileSize,
-            },
-            contentStream: request.createReadStream(),
-          });
+          resolve(httpHeaders);
+        } else {
+          // resolve as null, and let the read stream report the error.
+          resolve(null);
         }
       }).on('error', reject).send();
     });
+    if (headers === null) {
+      // There has been an error. Detailed error information may be in the stream.
+      // Let this get reported when the stream is read.
+      return {
+        metadata: {
+          snapshotId: "",
+          size: 0,
+        },
+        contentStream: request.createReadStream(),
+      };
+    }
+    // For a versioned bucket, the header 'x-amz-version-id' contains a version id.
+    const downloadedSnapshotId = headers['x-amz-version-id'] || '';
+    const fileSize = Number(headers['content-length']);
+    if (Number.isNaN(fileSize)) {
+      throw new ApiError('download error - bad file size', 500);
+    }
+    return {
+      metadata: {
+        snapshotId: downloadedSnapshotId,
+        size: fileSize,
+      },
+      contentStream: request.createReadStream(),
+    };
   }
 
   public async remove(key: string, snapshotIds?: string[]) {
