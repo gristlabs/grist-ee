@@ -4,6 +4,7 @@
     "**/*",
     // Added for typechecks. Not sure what other paths mean here as all are invalid.
     "../../../core/app/client/**/*",
+    "../../../ext/app/common/**/*",
     // TODO: explain those, as they are invalid, probably they are valid when moved around.
     "../../../app/client/**/*",
     "../../../stubs/app/client/ui/DeleteAccountDialog.ts",

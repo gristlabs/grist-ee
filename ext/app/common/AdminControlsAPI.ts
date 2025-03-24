@@ -62,7 +62,7 @@ export interface IWorkspaceFields extends ResourceAccessInfo {
   orgName: string;
   orgDomain: string|null;
   orgIsPersonal: boolean;
-  orgOwnerId?: number;
+  orgOwnerId: number|null;
   countDocs: number;
   countExtraDocUsers: number;   // Org members with no access to this workspace, but with access to a contained doc.
   access?: Role|null;           // Access is only set when filtering by a particular user.
