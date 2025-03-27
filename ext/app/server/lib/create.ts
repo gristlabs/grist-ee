@@ -1,4 +1,3 @@
-import { isAffirmative } from 'app/common/gutil';
 import { Activation } from 'app/gen-server/lib/Activation';
 import { addAdminControlsEndpoints } from 'app/gen-server/lib/AdminControls';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
@@ -56,9 +55,7 @@ class EnterpriseCreate extends BaseCreate {
   }
   public override addExtraHomeEndpoints(gristServer: GristServer, app: Express): void {
     // For now only enable for testing.
-    if (isAffirmative(process.env.GRIST_TEST_ENABLE_ADMIN_CONTROLS)) {
-      addAdminControlsEndpoints(gristServer.getHomeDBManager(), gristServer, app);
-    }
+    addAdminControlsEndpoints(gristServer.getHomeDBManager(), gristServer, app);
   }
 }
 

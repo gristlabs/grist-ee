@@ -1,5 +1,6 @@
 import {BaseAPI, IOptions} from 'app/common/BaseAPI';
 import {Role} from 'app/common/roles';
+import {PermissionData} from 'app/common/UserAPI';
 
 // The interface exposed to the client via REST API, and also implemented by AdminControls on the
 // server side.
@@ -8,6 +9,18 @@ export interface AdminControlsAPI {
   adminGetOrgs(options: {orgid?: number, userid?: number}): Promise<IOrgRecords>;
   adminGetWorkspaces(options: {orgid?: number, wsid?: number, userid?: number}): Promise<IWorkspaceRecords>;
   adminGetDocs(options: {orgid?: number, wsid?: number, docid?: string, userid?: number}): Promise<IDocRecords>;
+
+  // Single-record methods.
+  adminGetUser(userid: number): Promise<IUserRecord>;
+  adminGetOrg(orgid: number): Promise<IOrgRecord>;
+  adminGetWorkspace(wsid: number): Promise<IWorkspaceRecord>;
+  adminGetDoc(docid: string): Promise<IDocRecord>;
+
+  // Similar to getOrgAccess/getWorkspaceAccess/getDocAccess, but always accessible to an admin.
+  adminGetResourceAccess(options: {orgid?: number, wsid?: number, docid?: string}): Promise<PermissionData>;
+
+  // Methods that make changes.
+  adminDeleteUser(userId: number, email: string, newOwnerId: number): Promise<IUserFields>;
 }
 
 //----------------------------------------------------------------------
@@ -18,7 +31,7 @@ export type IUserRecord = IRecord<number, IUserFields>;
 export interface IUserRecords {records: IUserRecord[]}
 export interface IUserFields {
   name: string;
-  email: string;
+  email: string;                      // normalized email
   firstLoginAtMs: number|null;        // millisecond timestamp
   lastConnectionAtMs: number|null;    // millisecond timestamp
   hasApiKey: boolean;
@@ -134,6 +147,31 @@ export class AdminControlsAPIImpl extends BaseAPI implements AdminControlsAPI {
   ): Promise<IDocRecords> {
     const fullUrl = addParams(`${this._adminUrl}/docs`, options);
     return this.requestJson(fullUrl, {method: 'GET'});
+  }
+
+  public adminGetUser(userid: number): Promise<IUserRecord> {
+    return this.requestJson(`${this._adminUrl}/users/${userid}`);
+  }
+  public adminGetOrg(orgid: number): Promise<IOrgRecord> {
+    return this.requestJson(`${this._adminUrl}/orgs/${orgid}`);
+  }
+  public adminGetWorkspace(wsid: number): Promise<IWorkspaceRecord> {
+    return this.requestJson(`${this._adminUrl}/workspaces/${wsid}`);
+  }
+  public adminGetDoc(docid: string): Promise<IDocRecord> {
+    return this.requestJson(`${this._adminUrl}/docs/${docid}`);
+  }
+
+  public async adminGetResourceAccess(
+    options: {orgid?: number, wsid?: number, docid?: string}
+  ): Promise<PermissionData> {
+    const fullUrl = addParams(`${this._adminUrl}/access`, options);
+    return this.requestJson(fullUrl, {method: 'GET'});
+  }
+
+  public async adminDeleteUser(userId: number, email: string, newOwnerId: number): Promise<IUserFields> {
+    const fullUrl = addParams(`${this._adminUrl}/users/${userId}/${email}`, {newOwnerId});
+    return this.requestJson(fullUrl, {method: 'DELETE'});
   }
 }
 

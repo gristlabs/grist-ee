@@ -1,5 +1,4 @@
-import { AdminControlsAPI, IRecord } from 'app/common/AdminControlsAPI';
-import { ApiError } from 'app/common/ApiError';
+import { AdminControlsAPI } from 'app/common/AdminControlsAPI';
 import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { RequestWithLogin } from 'app/server/lib/Authorizer';
 import { HomeDBAdmin } from 'app/gen-server/lib/HomeDBAdmin';
@@ -18,7 +17,7 @@ export function addAdminControlsEndpoints(
   app: express.Express,
 ) {
   const log = new LogMethods("AdminControls", getLogMeta);
-  const dbAdmin: AdminControlsAPI = new HomeDBAdmin(dbManager);
+  const dbAdmin: AdminControlsAPI = new HomeDBAdmin(dbManager, gristServer);
   exposedForTests.adminControls = dbAdmin;
 
   // All endpoints are currently controlled by the install admin.
@@ -33,12 +32,6 @@ export function addAdminControlsEndpoints(
     });
   }
 
-  async function wrapSingleRecord<Key, Fields>(what: string, result: Promise<{records: IRecord<Key, Fields>[]}>) {
-    const records = (await result).records;
-    if (!records.length) { throw new ApiError(`${what} not found`, 404); }
-    return records[0];
-  }
-
   // Helpers to parse common query parameters concisely.
   const orgid = (req: Request) => optIntegerParam(req.query.orgid, 'orgid');
   const wsid = (req: Request) => optIntegerParam(req.query.wsid,  'wsid');
@@ -49,24 +42,34 @@ export function addAdminControlsEndpoints(
     return dbAdmin.adminGetUsers({orgid: orgid(req), wsid: wsid(req), docid: docid(req), userid: userid(req)});
   }));
   app.get('/api/admin-controls/users/:userid', handle((req) => {
-    return wrapSingleRecord('User', dbAdmin.adminGetUsers({userid: integerParam(req.params.userid, 'userid')}));
+    return dbAdmin.adminGetUser(integerParam(req.params.userid, 'userid'));
   }));
   app.get('/api/admin-controls/orgs', handle((req) => {
     return dbAdmin.adminGetOrgs({orgid: orgid(req), userid: userid(req)});
   }));
   app.get('/api/admin-controls/orgs/:orgid', handle((req) => {
-    return wrapSingleRecord('Organization', dbAdmin.adminGetOrgs({orgid: integerParam(req.params.orgid, 'orgid')}));
+    return dbAdmin.adminGetOrg(integerParam(req.params.orgid, 'orgid'));
   }));
   app.get('/api/admin-controls/workspaces', handle((req) => {
     return dbAdmin.adminGetWorkspaces({orgid: orgid(req), wsid: wsid(req), userid: userid(req)});
   }));
   app.get('/api/admin-controls/workspaces/:wsid', handle((req) => {
-    return wrapSingleRecord('Workspace', dbAdmin.adminGetWorkspaces({wsid: integerParam(req.params.wsid, 'wsid')}));
+    return dbAdmin.adminGetWorkspace(integerParam(req.params.wsid, 'wsid'));
   }));
   app.get('/api/admin-controls/docs', handle((req) => {
     return dbAdmin.adminGetDocs({orgid: orgid(req), wsid: wsid(req), docid: docid(req), userid: userid(req)});
   }));
   app.get('/api/admin-controls/docs/:docid', handle((req) => {
-    return wrapSingleRecord('Document', dbAdmin.adminGetDocs({docid: stringParam(req.params.docid, 'docid')}));
+    return dbAdmin.adminGetDoc(stringParam(req.params.docid, 'docid'));
+  }));
+  app.get('/api/admin-controls/access', handle((req) => {
+    return dbAdmin.adminGetResourceAccess({orgid: orgid(req), wsid: wsid(req), docid: docid(req)});
+  }));
+
+  // The "/:email" suffix (for User.loginEmail) serves as confirmation, to ensure the deletion is intentional.
+  app.delete('/api/admin-controls/users/:userid/:email', handle(async (req) => {
+    const newOwnerId = integerParam(req.query.newOwnerId, 'newOwnerId');
+    const email = stringParam(req.params.email, 'email');
+    return dbAdmin.adminDeleteUser(integerParam(req.params.userid, 'userid'), email, newOwnerId);
   }));
 }

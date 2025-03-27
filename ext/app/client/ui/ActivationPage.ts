@@ -26,7 +26,13 @@ export function getActivationPage(): IActivationPageCreator {
   return isEnterpriseDeployment() ? EnterpriseActivationPage : DefaultActivationPage;
 }
 
-export class EnterpriseActivationPage extends Disposable {
+export function showEnterpriseToggle() {
+  // We show this toggle for both Enterprise and Core deployments.
+  // The core build (oss image) in stubs returns false here.
+  return true;
+}
+
+class EnterpriseActivationPage extends Disposable {
   private readonly _currentPage = Computed.create(this, urlState().state, (_use, s) => s.activation);
   private _model: ActivationModel = new ActivationModelImpl(this._appModel);
 

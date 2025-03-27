@@ -2,20 +2,26 @@ import {
   AdminControlsAPI,
   IDocFields, IDocRecords,
   IOrgFields, IOrgRecords,
+  IRecord,
   IUserFields, IUserRecords,
   IWorkspaceFields, IWorkspaceRecords,
   ResourceAccessInfo
 } from 'app/common/AdminControlsAPI';
+import { ApiError } from 'app/common/ApiError';
 import { countIf } from 'app/common/gutil';
 import { GUEST } from 'app/common/roles';
 import * as roles from 'app/common/roles';
+import { PermissionData } from 'app/common/UserAPI';
 import { AclRule } from 'app/gen-server/entity/AclRule';
 import { Document } from 'app/gen-server/entity/Document';
 import { Organization } from 'app/gen-server/entity/Organization';
 import { User } from 'app/gen-server/entity/User';
 import { Workspace } from 'app/gen-server/entity/Workspace';
+import { Doom } from 'app/gen-server/lib/Doom';
 import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
-import { ObjectLiteral, SelectQueryBuilder } from "typeorm";
+import { scrubUserFromBillingAccounts, scrubUserFromOrg } from "app/gen-server/lib/scrubUserFromOrg";
+import { GristServer } from 'app/server/lib/GristServer';
+import { SelectQueryBuilder } from "typeorm";
 import pick = require('lodash/pick');
 
 // Postgres returns BigInts for counts, which we receive as strings. This type helps remember
@@ -33,7 +39,10 @@ interface ResourceQueryResults {
 }
 
 export class HomeDBAdmin implements AdminControlsAPI {
-  public constructor(private readonly _homeDb: HomeDBManager) {}
+  public constructor(
+    private readonly _homeDb: HomeDBManager,
+    private readonly _gristServer: GristServer,
+  ) {}
 
   public async adminGetUsers(
     options: {orgid?: number, wsid?: number, docid?: string, userid?: number}
@@ -54,30 +63,8 @@ export class HomeDBAdmin implements AdminControlsAPI {
         ((subQuery) => subQuery
           .select('users.id', 'id')
           .from(User, 'users')
-          .chain(qb => {
-            // Here we produce the same result as we can get using HomeDBManager's _joinToAllGroupUsers,
-            // but for our purpose, this implementations seems to be many times faster.
-            const allQueries: string[] = [];
-            const conn = this._homeDb.connection;
-            for (let groupLevel = 0; groupLevel <= 3; groupLevel++) {
-              let subQb = conn.createQueryBuilder()
-                .addSelect('ac.workspace_id')
-                .addSelect('ac.org_id')
-                .addSelect('ac.doc_id')
-                .addSelect('ac.group_id', 'group_id')
-                .addSelect('gu.user_id', 'user_id')
-                .from(AclRule, 'ac');
-              let joinKey = 'ac.group_id';
-              for (let i = 0; i < groupLevel; i++) {
-                subQb = subQb.innerJoin('group_groups', `gg${i}`, `${joinKey} = gg${i}.group_id`);
-                joinKey = `gg${i}.subgroup_id`;
-              }
-              subQb = subQb.innerJoin('group_users', 'gu', `${joinKey} = gu.group_id`);
-              allQueries.push(subQb.getQuery());
-            }
-            const combinedQuery = '(' + allQueries.join(" UNION ") + ')';
-            return qb.innerJoin(combinedQuery, 'acl_rules', 'users.id = acl_rules.user_id');
-          })
+          .innerJoin(this._createAclRuleIdToUserIdQuery(), 'au', 'users.id = au.user_id')
+          .leftJoin(AclRule, 'acl_rules', 'acl_rules.id = au.acl_rule_id')
           .chain(qb => {
             if (isFilteredByResource) {
               qb = qb
@@ -116,6 +103,7 @@ export class HomeDBAdmin implements AdminControlsAPI {
 
     const rawResultsMap = new Map<number, UserResourceCounts>(result.raw.map(r => [r.id, r]));
     const specialUserIds = new Set(this._homeDb.getSpecialUserIds());
+    specialUserIds.delete(this._homeDb.getSupportUserId());  // Don't exclude support user; they may be real.
     const records = result.entities
       .filter(user => !specialUserIds.has(user.id))     // Skip special users (like "everyone")
       .map((user: User) => {
@@ -280,20 +268,91 @@ export class HomeDBAdmin implements AdminControlsAPI {
     return {records};
   }
 
+  public async adminGetResourceAccess(
+    options: {orgid?: number, wsid?: number, docid?: string}
+  ): Promise<PermissionData> {
+    const {orgid, wsid, docid} = options;
+    if (countIf([orgid, wsid, docid], isSet) > 1) {
+      throw new Error("adminGetResourceAccess: At most one filter parameter is supported");
+    }
+    const scope = {userId: this._homeDb.getPreviewerUserId()};
+    const result = await (
+      isSet(orgid) ? this._homeDb.getOrgAccess(scope, orgid) :
+      isSet(wsid) ? this._homeDb.getWorkspaceAccess(scope, wsid) :
+      isSet(docid) ? this._homeDb.getDocAccess({...scope, urlId: docid}) :
+      null);
+    if (!result) {
+      throw new Error("adminGetResourceAccess: Exactly one filter parameter is required");
+    }
+    return this._homeDb.unwrapQueryResult(result);
+  }
+
+  public adminGetUser(userid: number) { return getFirstRecord('User', this.adminGetUsers({userid})); }
+  public adminGetOrg(orgid: number) { return getFirstRecord('Organization', this.adminGetOrgs({orgid})); }
+  public adminGetWorkspace(wsid: number) { return getFirstRecord('Workspace', this.adminGetWorkspaces({wsid})); }
+  public adminGetDoc(docid: string) { return getFirstRecord('Document', this.adminGetDocs({docid})); }
+
+  // Delete the user, which means:
+  // - Remove them from every org they have access to, reassigning owned resources to newOwnerId.
+  // - Delete their personal org.
+  // - Delete the user from the database.
+  // - Delete the user from notifications and login services.
+  // Correct email (normalized, i.e. lowercase, as returned by adminGetUsers()) is required too,
+  // to reduce the chance of accidental deletions, since it is a more intentional identifier
+  // that's harder to get wrong by mistake.
+  // Returns the record for the user as seen before the deletion.
+  public async adminDeleteUser(userId: number, email: string, newOwnerId: number): Promise<IUserFields> {
+    const server = this._gristServer;
+    const permitStore = server.getPermitStore();
+    const notifier = server.getNotifier();
+    const loginSystem = await server.resolveLoginSystem();
+    const homeApiUrl: string = server.getHomeInternalUrl().replace(/\/$/, '');
+    const doom = new Doom(this._homeDb, permitStore, notifier, loginSystem, homeApiUrl);
+    const user = await this._homeDb.getUser(userId);
+    if (!user || user.loginEmail !== email) {
+      throw new ApiError(`User ${userId} with email "${email}" not found`, 404);
+    }
+    const newOwner = await this._homeDb.getUser(newOwnerId);
+    if (!newOwner) {
+      throw new ApiError(`New owner user ${newOwnerId} not found`, 404);
+    }
+
+    // Fetch the initial state of the user in the usual admin format.
+    const deletedUserInfo: IUserFields = (await this.adminGetUsers({userid: userId})).records[0].fields;
+
+    // Scrub the user from orgs they are in.
+    const orgs = this._homeDb.unwrapQueryResult(
+      await this._homeDb.getOrgs(userId, null, {ignoreEveryoneShares: true}));
+
+    // TODO It would make sense to do _everything_ in a transaction (including query and
+    // deleteUser()), once this is easier to do.
+    await this._homeDb.runInTransaction(undefined, async (manager) => {
+      for (const org of orgs) {
+        // Omit scrubbing from personal org; deleteUser() will delete it.
+        if (org.ownerId !== userId) {
+          await scrubUserFromOrg(org.id, userId, newOwnerId, manager);
+        }
+      }
+
+      await scrubUserFromBillingAccounts(userId, newOwnerId, manager);
+    });
+
+    // Do the actual deletion of the user.
+    await doom.deleteUser(userId);
+
+    return deletedUserInfo;
+  }
+
   // Expects a query that includes `acl_rules`. It is very specific to the particular
   // few queries that use this helper.
   // In particular, it adds .having() clause, so the outer query must use .groupBy().
-  private _addResourceAccessInfo<T extends ObjectLiteral>(
-    queryBuilder: SelectQueryBuilder<T>,
-    userid?: number,
-    orgVar?: string
-  ) {
+  private _addResourceAccessInfo<T>(queryBuilder: SelectQueryBuilder<T>, userid?: number, orgVar?: string) {
     const filterOutSpecial = `users.id NOT IN (:everyoneId, :anonId)`;
 
     return queryBuilder
       .leftJoin('acl_rules.group', 'groups')
-      .chain(qb => this._homeDb._joinToAllGroupUsers(qb))
-      .leftJoin(User, 'users', 'users.id IN (gu0.user_id, gu1.user_id, gu2.user_id, gu3.user_id)')
+      .innerJoin(this._createAclRuleIdToUserIdQuery(), 'au', 'acl_rules.id = au.acl_rule_id')
+      .leftJoin(User, 'users', 'users.id = au.user_id')
 
       // It takes extra effort to collect info about guests: we need to figure out who is a
       // member the org. We only do this when orgVar is given.
@@ -363,12 +422,41 @@ export class HomeDBAdmin implements AdminControlsAPI {
       ...(groupNames.length > 0 ? {access: getStrongestRole(groupNames)} : {}),
     };
   }
+
+  // Produce query for a join similar to that in HomeDBManager's _joinToAllGroupUsers,
+  // but for our purpose, this implementations seems to be many times faster.
+  // This is to be used in a subquery, and yields (acl_rule_id, user_id) records, which
+  // identify an acl_rule record and a user_id it applies to.
+  private _createAclRuleIdToUserIdQuery(): string {
+    const allQueries: string[] = [];
+    const conn = this._homeDb.connection;
+    for (let groupLevel = 0; groupLevel <= 3; groupLevel++) {
+      let subQb = conn.createQueryBuilder()
+        .addSelect('ac.id', 'acl_rule_id')
+        .addSelect('gu.user_id', 'user_id')
+        .from(AclRule, 'ac');
+      let joinKey = 'ac.group_id';
+      for (let i = 0; i < groupLevel; i++) {
+        subQb = subQb.innerJoin('group_groups', `gg${i}`, `${joinKey} = gg${i}.group_id`);
+        joinKey = `gg${i}.subgroup_id`;
+      }
+      subQb = subQb.innerJoin('group_users', 'gu', `${joinKey} = gu.group_id`);
+      allQueries.push(subQb.getQuery());
+    }
+    return '(' + allQueries.join(" UNION ") + ')';
+  }
 }
 
 function getStrongestRole(roleList: roles.Role[]): roles.Role{
   return roleList.reduce((result, role) => roles.getStrongestRole(result, role));
 }
 
-function isSet(param: number|string|undefined) {
+function isSet(param: number|string|undefined): param is number|string{
   return param != null;
+}
+
+async function getFirstRecord<Key, Fields>(what: string, result: Promise<{records: IRecord<Key, Fields>[]}>) {
+  const records = (await result).records;
+  if (!records.length) { throw new ApiError(`${what} not found`, 404); }
+  return records[0];
 }
