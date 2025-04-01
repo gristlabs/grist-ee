@@ -54,9 +54,9 @@ class EnterpriseCreate extends BaseCreate {
     return getLoginSystem();
   }
   public override addExtraHomeEndpoints(gristServer: GristServer, app: Express): void {
-    // For now only enable for testing.
     addAdminControlsEndpoints(gristServer.getHomeDBManager(), gristServer, app);
   }
+  public override areAdminControlsAvailable(): boolean { return true; }
 }
 
 export const create: ICreate = isRunningEnterprise() ? new EnterpriseCreate() : new CoreCreate();
