@@ -17,7 +17,7 @@ export function addAdminControlsEndpoints(
   app: express.Express,
 ) {
   const log = new LogMethods("AdminControls", getLogMeta);
-  const dbAdmin: AdminControlsAPI = new HomeDBAdmin(dbManager, gristServer);
+  const dbAdmin = new HomeDBAdmin(dbManager, gristServer);
   exposedForTests.adminControls = dbAdmin;
 
   // All endpoints are currently controlled by the install admin.

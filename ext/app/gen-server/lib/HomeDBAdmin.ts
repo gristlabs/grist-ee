@@ -140,11 +140,13 @@ export class HomeDBAdmin implements AdminControlsAPI {
       .select('orgs')
       .from(Organization, 'orgs')
       .leftJoin('orgs.aclRules', 'acl_rules')
+      .leftJoin('orgs.owner', 'owner')
       .chain(qb => this._addResourceAccessInfo(qb, userid))
       .leftJoin('orgs.workspaces', 'workspaces', 'workspaces.removedAt IS NULL')
       .leftJoin('workspaces.docs', 'docs', 'docs.removedAt IS NULL')
       .addSelect('COUNT(DISTINCT workspaces.id)', 'countWorkspaces')
       .addSelect('COUNT(DISTINCT docs.id)', 'countDocs')
+      .addSelect('MAX(owner.name)', 'ownerName')
       .chain(qb => {
         if (isSet(orgid)) { qb = qb.andWhere('orgs.id = :orgid', {orgid}); }
         return qb;
@@ -152,13 +154,14 @@ export class HomeDBAdmin implements AdminControlsAPI {
       .groupBy('orgs.id')
       .getRawAndEntities();
 
-    type Result = ResourceQueryResults & {countWorkspaces: PgNumber, countDocs: PgNumber};
+    type Result = ResourceQueryResults & {countWorkspaces: PgNumber, countDocs: PgNumber, ownerName: string};
     const rawResultsMap = new Map<number, Result>(result.raw.map(r => [r.orgs_id, r]));
     const records = result.entities.map((org: Organization) => {
       const id = org.id;
       const raw = rawResultsMap.get(id);
       const fields: IOrgFields = {
         ...pick(org, 'name', 'domain', 'ownerId'),
+        name: raw?.ownerName ? `@${raw.ownerName}` : org.name,
         createdAtMs: org.createdAt.getTime(),
         isPersonal: Boolean(org.ownerId),
         // Postgres returns BigInts for counts, which we see as strings here.
@@ -179,6 +182,8 @@ export class HomeDBAdmin implements AdminControlsAPI {
       .select('workspaces')
       .from(Workspace, 'workspaces')
       .leftJoinAndSelect('workspaces.org', 'org')
+      .leftJoin('org.owner', 'owner')
+      .addSelect('MAX(owner.name)', 'ownerName')
       .leftJoin('workspaces.aclRules', 'acl_rules')
       .chain(qb => this._addResourceAccessInfo(qb, userid, 'org'))
       .leftJoin('workspaces.docs', 'docs', 'docs.removedAt IS NULL')
@@ -191,7 +196,7 @@ export class HomeDBAdmin implements AdminControlsAPI {
       .groupBy('workspaces.id, org.id')
       .getRawAndEntities();
 
-    type Result = ResourceQueryResults & {countDocs: PgNumber};
+    type Result = ResourceQueryResults & {countDocs: PgNumber, ownerName: string};
     const rawResultsMap = new Map<number, Result>(result.raw.map(r => [r.workspaces_id, r]));
     const records = result.entities.map((ws: Workspace) => {
       const id = ws.id;
@@ -202,7 +207,7 @@ export class HomeDBAdmin implements AdminControlsAPI {
         updatedAtMs: ws.updatedAt.getTime(),
         ...(ws.removedAt ? {removedAtMs: ws.removedAt.getTime()} : {}),
         orgId: ws.org.id,
-        orgName: ws.org.name,
+        orgName: raw?.ownerName ? `@${raw.ownerName}` : ws.org.name,
         orgDomain: ws.org.domain,
         orgIsPersonal: Boolean(ws.org.ownerId),
         orgOwnerId: ws.org.ownerId,
@@ -225,6 +230,8 @@ export class HomeDBAdmin implements AdminControlsAPI {
       .leftJoin('docs.aclRules', 'acl_rules')
       .leftJoinAndSelect('docs.workspace', 'workspace')
       .leftJoinAndSelect('workspace.org', 'org')
+      .leftJoin('org.owner', 'owner')
+      .addSelect('MAX(owner.name)', 'ownerName')
       .chain(qb => this._addResourceAccessInfo(qb, userid, 'org'))
       .chain(qb => {
         if (isSet(orgid)) { qb = qb.andWhere('workspace.org_id = :orgid', {orgid}); }
@@ -236,7 +243,7 @@ export class HomeDBAdmin implements AdminControlsAPI {
       .groupBy('docs.id, workspace.id, org.id')
       .getRawAndEntities();
 
-    type Result = ResourceQueryResults;
+    type Result = ResourceQueryResults & { ownerName: string};
     const rawResultsMap = new Map<string, Result>(result.raw.map(r => [r.docs_id, r]));
     const records = result.entities.map((doc: Document) => {
       const id = doc.id;
@@ -257,7 +264,7 @@ export class HomeDBAdmin implements AdminControlsAPI {
         workspaceId: doc.workspace.id,
         workspaceName: doc.workspace.name,
         orgId: doc.workspace.org.id,
-        orgName: doc.workspace.org.name,
+        orgName: raw?.ownerName ? `@${raw.ownerName}` : doc.workspace.org.name,
         orgDomain: doc.workspace.org.domain,
         orgIsPersonal: Boolean(doc.workspace.org.ownerId),
         orgOwnerId: doc.workspace.org.ownerId,

@@ -29,7 +29,6 @@ export function orgColumns(opts: {forUser?: boolean, detail?: boolean}): ColumnS
     {label: t('Org Id'), colId: 'id', type: 'Int', width: 80},
     {label: t('Domain'), colId: 'domain', type: 'Text', width: 150},
     {label: t('Is Personal'), colId: 'isPersonal', type: 'Bool', width: 80},
-    {label: t('Owner Id'), colId: 'ownerId', type: 'Int', width: 80},
     {label: t('Created At'), colId: 'createdAtMs', ...Date},
     {label: t('Workspaces'), colId: 'countWorkspaces', type: 'Int', width: 80},
     {label: t('Docs'), colId: 'countDocs', type: 'Int', width: 80},
@@ -44,7 +43,6 @@ function parentOrgColumns(): ColumnSpec<string>[] {
     {label: t('Org Name'), colId: 'orgName', width: 200, ...Link('orgs', 'orgId')},
     {label: t('Org Domain'), colId: 'orgDomain', type: 'Text', width: 150},
     {label: t('Is Personal'), colId: 'orgIsPersonal', type: 'Bool', width: 80},
-    {label: t('Org Owner Id'), colId: 'orgOwnerId', type: 'Int', width: 80},
   ];
 }
 

@@ -296,9 +296,12 @@ function orgsPage(owner: MultiHolder, appModel: AppModel, api: AdminControlsAPI)
     {id: 'users', label: t('Users')},
   ];
 
+  // Figure out what the domain of personal orgs is.
+  const personalOrg = appModel.topAppModel.orgs.get().find(o => Boolean(o.owner))?.domain || undefined;
+
   function getResourceUrlState(rowId: number) {
     const tableData = doc.docData.getTable('orgs')!;
-    const org = tableData.getValue(rowId, 'domain') as string;
+    const org = (tableData.getValue(rowId, 'domain') || personalOrg) as string;
     return {org};
   }
 
@@ -509,7 +512,7 @@ function docsPage(owner: MultiHolder, appModel: AppModel, api: AdminControlsAPI)
 }
 
 function actionButton(hasDetails: Observable<boolean>, items: () => DomElementArg[]) {
-  return selectMenu(selectTitle("Actions"), items,
+  return selectMenu(selectTitle(t("Actions")), items,
     dom.show(hasDetails),
     testId('actions')
   );
@@ -529,7 +532,7 @@ function openManageUsersAction(open: () => Promise<void>) {
 
 function addResourceActions(hasDetails: Observable<boolean>, actionItems: () => DomElementArg[]) {
   const actionMenu = (items: Element[], options: {numRows: number}) => [
-    menuItemSubmenu(actionItems, {}, t('Actions')),
+    menuItemSubmenu(actionItems, {}, t("Actions")),
     menuDivider(),
     ...items,
   ];
@@ -601,6 +604,7 @@ function buildPage(owner: MultiHolder, props: {
           },
           cellMenu: props.contextMenu,
           rowMenu: props.rowMenu,
+          disableAddRemove: true,
         }),
         testId('list'),
       ),
@@ -651,7 +655,8 @@ function buildPage(owner: MultiHolder, props: {
                 selectBy: {
                   sectionId: 'list',
                   colId: listKey,
-                }
+                },
+                disableAddRemove: true,
               }),
             );
           }),
@@ -774,10 +779,7 @@ class DeleteUserDialog extends Disposable {
   });
   private _pending = Observable.create(this, false);
   private _loaded = Observable.create(this, false);
-  private _belongings = Observable.create(this, {docs: 0, orgs: 0, workspaces: 0});
-  private _hasBelongings = Computed.create(this, use => {
-    return use(this._belongings).docs > 0 || use(this._belongings).orgs > 0 || use(this._belongings).workspaces > 0;
-  });
+  private _belongings = Observable.create(this, {docs: 0, orgs: 0, workspaces: 0, personalDocs: 0});
   private _userId: number;
   private _currentUserId: number;
   private _onDeleted?: () => void;
@@ -822,60 +824,63 @@ class DeleteUserDialog extends Disposable {
       return [
         testId('remove-dialog'),
         cssModalWidth('fixed-wide'),
-        cssModalTitle('Delete account'),
+        cssModalTitle(t("Delete account")),
         spinner(
           testId('spinner'),
           loadingSpinner(),
           dom.show(this._pending),
         ),
         dom.maybe(this._loaded, () => [
-          cssText(
-            dom('p',
-              'Are you sure you want to delete ',
-              dom('b', this._userToDelete.get()!.fields.email),
-              ' account? This action is permanent and cannot be undone. ',
-            ),
-            cssInput(this._email,
-              {
-                placeholder: 'To proceed, please type users`s email address',
-                required: 'true',
-              },
-              (el) => {
-                setTimeout(() => el.focus(), 10);
-              },
-              testId('email'),
-              dom.style('margin-top', '16px'),
-            ),
+          cssText(t(`Are you sure you want to delete {{email}} account? \
+This action is permanent and cannot be undone.`,
+            {email: dom('b', this._userToDelete.get()!.fields.email)}),
           ),
-          // If this user has some belongings, show it and show the ui for transferring them.
-          dom.maybe(this._hasBelongings, () => {
-            const users = this._userList.get().filter(notUser(this._userId)).map(toMenuItem);
-            return cssWarning(
-              testId('warning'),
-              cssText(
-                dom.domComputed(this._belongings, belongings => [
-                  dom('p',
-                    'This user is an owner of ',
-                    dom('b', String(belongings.docs)),
-                    ' docs, ',
-                    dom('b', String(belongings.orgs)),
-                    ' orgs and ',
-                    dom('b', String(belongings.workspaces)),
-                    ' workspaces. ',
-                    'Please select another user to transfer them to. ',
-                    'Personal org and personal documents will be removed.',
-                  ),
-                ])
-              ),
-              dom.update(
-                select(this._otherUser, users),
-                testId('other-user-select'),
-              ),
-            );
+          cssInput(this._email,
+            {
+              placeholder: t("To proceed, please type users`s email address"),
+              required: 'true',
+            },
+            (el) => {
+              setTimeout(() => el.focus(), 10);
+            },
+            testId('email'),
+            dom.style('margin-top', '16px'),
+          ),
+          // If this user has some belongings, show warnings.
+          dom.domComputed(this._belongings, belongings => {
+            const warnings: DomContents[] = [];
+            if (belongings.personalDocs) {
+              warnings.push(
+                cssText(t("Personal org and {{numDocs}} personal documents will be permanently removed.",
+                  {numDocs: dom('b', String(belongings.personalDocs))})),
+              );
+            }
+            const hasTeamMaterials = (belongings.docs > 0 || belongings.orgs > 0 || belongings.workspaces > 0);
+            if (hasTeamMaterials) {
+              // If there are team materials, show the ui for transferring them.
+              const users = this._userList.get().filter(notUser(this._userId)).map(toMenuItem);
+              warnings.push(
+                cssText(
+                  t(`This user is an owner of some material in team sites: \
+{{numDocs}} docs, {{numOrgs}} orgs, {{numWorkspaces}} workspaces. \
+Please select another user to transfer them to.`,
+                    {
+                      numDocs: dom('b', String(belongings.docs)),
+                      numOrgs: dom('b', String(belongings.orgs)),
+                      numWorkspaces: dom('b', String(belongings.workspaces)),
+                    }),
+                ),
+                dom.update(
+                  select(this._otherUser, users),
+                  testId('other-user-select'),
+                ),
+              );
+            }
+            return warnings.length > 0 ? cssWarning(warnings, testId('warning')) : null;
           }),
           cssButtonsLine(
             bigBasicButton(
-              'Yes, delete account',
+              t('Yes, delete account'),
               dom.prop('disabled', use => use(this._pending) || !use(this._canDelete)),
               testId('confirm'),
               dom.on('click', async () => {
@@ -883,7 +888,7 @@ class DeleteUserDialog extends Disposable {
                 await this._removeAccount();
               })
             ),
-            bigPrimaryButton('Cancel',
+            bigPrimaryButton(t('Cancel'),
               testId('cancel'),
               dom.prop('disabled', this._pending),
               dom.on('click', () => ctl.close()),
@@ -911,16 +916,16 @@ class DeleteUserDialog extends Disposable {
     this._userToDelete.set(await this._api.adminGetUser(this._userId));
 
     // Fill out belongings of this user (fetch other things user is owner of).
-    const docs = await this._api.adminGetDocs({userid: this._userId}).then(d => d.records.filter(
-      r => r.fields.access === 'owners' && !r.fields.orgIsPersonal
-    ).length);
-    const orgs = await this._api.adminGetOrgs({userid: this._userId}).then(d => d.records.filter(
+    const allDocs = await this._api.adminGetDocs({userid: this._userId});
+    const personalDocs = allDocs.records.filter(r => r.fields.orgOwnerId === this._userId).length;
+    const docs = allDocs.records.filter(r => r.fields.access === 'owners' && !r.fields.orgIsPersonal).length;
+    const orgs = (await this._api.adminGetOrgs({userid: this._userId})).records.filter(
       r => r.fields.access === 'owners' && !r.fields.isPersonal
-    ).length);
-    const workspaces = await this._api.adminGetWorkspaces({userid: this._userId}).then(d => d.records.filter(
+    ).length;
+    const workspaces = (await this._api.adminGetWorkspaces({userid: this._userId})).records.filter(
       r => r.fields.access === 'owners' && !r.fields.orgIsPersonal
-    ).length);
-    const belongings = {docs, orgs, workspaces};
+    ).length;
+    const belongings = {docs, orgs, workspaces, personalDocs};
     this._belongings.set(belongings);
     // We will transfer all those belongings to the new user.
     this._otherUser.set(this._currentUserId);
@@ -938,7 +943,7 @@ class DeleteUserDialog extends Disposable {
       throw new Error('Invalid state');
     }
 
-    await spinnerModal('Deleting account', this._api.adminDeleteUser(
+    await spinnerModal(t("Deleting account"), this._api.adminDeleteUser(
       userRecord.id,
       email,
       otherUser,
@@ -950,7 +955,7 @@ class DeleteUserDialog extends Disposable {
 
 function hideDetailsButton(hasDetails: Observable<boolean>, onClick?: (on: boolean) => void) {
   return cssBasicButton(
-    'Hide details',
+    t("Hide details"),
     dom.on('click', () => onClick ? onClick(false) : hasDetails.set(false)),
     testId('hide-details-button'),
     dom.show(hasDetails),
@@ -959,7 +964,7 @@ function hideDetailsButton(hasDetails: Observable<boolean>, onClick?: (on: boole
 
 function showDetailsButton(hasDetails: Observable<boolean>, onClick?: (on: boolean) => void) {
   return cssPrimaryButton(
-    'Show details',
+    t("Show details"),
     dom.on('click', () => onClick ? onClick(true) : hasDetails.set(true)),
     testId('show-details-button'),
     dom.show(not(hasDetails)),
@@ -1128,8 +1133,10 @@ const cssDocumentResizeHandler = styled(resizeFlexVHandle, `
 `);
 
 const cssText = styled('p', `
-  max-width: 576px;
   margin-bottom: 16px;
+  &:last-child {
+    margin-bottom: 0;
+  }
 `);
 
 const cssButtonsLine = styled('div', `
