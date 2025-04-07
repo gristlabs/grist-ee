@@ -44,7 +44,11 @@ export class S3ExternalStorage implements ExternalStorage {
   public async upload(key: string, fname: string, metadata?: ObjMetadata) {
     const stat = await fse.lstat(fname);
     const readStream = fse.createReadStream(fname);
-    return this.uploadStream(key, readStream, stat.size, metadata);
+    try {
+      return await this.uploadStream(key, readStream, stat.size, metadata);
+    } finally {
+      readStream.destroy();
+    }
   }
 
   public async uploadStream(key: string, inStream: stream.Readable, size?: number|undefined, metadata?: ObjMetadata) {
