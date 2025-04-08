@@ -1,0 +1,9 @@
+***********************************
+Two-factor authentication disabled.
+***********************************
+
+Your Grist account is no longer protected with two-factor authentication. When signing in, you won't be prompted to enter a verification code.
+
+If you did not make this change, please contact support@getgrist.com.
+
+© 2022 Grist Labs.

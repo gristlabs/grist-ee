@@ -53,6 +53,8 @@ export class HomeDBAdmin implements AdminControlsAPI {
     }
     const isFilteredByResource = isSet(orgid) || isSet(wsid) || isSet(docid);
 
+    // Note that this assumes one User corresponds to one Login. Our DB in theory allows multiple
+    // logins per user, but in practice Grist app assumes in many places that there is only one.
     const result = await this._homeDb.connection.createQueryBuilder()
       .select('user')
       .from(User, 'user')

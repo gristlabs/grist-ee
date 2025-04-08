@@ -1,0 +1,17 @@
+*************************************************
+Your trial period for {{org.name}} will end soon.
+*************************************************
+
+Your team plan will renew automatically {{#if howSoon}}in about {{howSoon}}{{else}}soon{{/if}}, so you can continue to enjoy these awesome Grist team features:
+
+Team Sharing
+
+Unlimited Documents
+
+Convenient Workspaces
+
+Now would be a great time to review your billing information and your list of team members.
+
+REVIEW BILLING INFORMATION ( {{{billingUrl}}} )
+
+© 2022 Grist Labs.

@@ -1,0 +1,22 @@
+Membership has changed for {{org.name}}
+
+Membership has changed for {{org.name}}.
+
+{{#added}}
+ User {{name}} {{email}} was added.
+ {{/added}}
+ {{#removed}}
+ User {{name}} {{email}} was removed.
+ {{/removed}}
+
+The price of your plan is determined by the number of users, which is now {{countAfter}}.
+
+{{resource.name}}
+
+This change was initiated by {{initiatingUser.name}} ({{initiatingUser.email}})
+
+VIEW BILLING INFORMATION {{{billingUrl}}}
+
+© 2019 Grist Labs. All rights reserved.
+
+379 W Broadway, New York, NY 10012
