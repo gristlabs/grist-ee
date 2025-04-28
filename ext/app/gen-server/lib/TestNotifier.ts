@@ -1,3 +1,4 @@
+import { INotifier } from 'app/server/lib/INotifier';
 import { Mailer, NotifierBase } from 'app/gen-server/lib/NotifierTools';
 import { SendGridMail } from 'app/gen-server/lib/NotifierTypes';
 
@@ -9,7 +10,7 @@ import { SendGridMail } from 'app/gen-server/lib/NotifierTypes';
  *
  */
 export class TestNotifier extends NotifierBase {
-  public async applyNotification(mail: Mailer<SendGridMail>) {
-    console.log(JSON.stringify({notification: 'test', mail}));
+  public async applyNotification(eventName: keyof INotifier, mail: Mailer<SendGridMail>) {
+    console.log(JSON.stringify({notification: 'test', eventName, mail}));
   }
 }

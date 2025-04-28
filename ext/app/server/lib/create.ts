@@ -1,7 +1,9 @@
 import { Activation } from 'app/gen-server/lib/Activation';
 import { addAdminControlsEndpoints } from 'app/gen-server/lib/AdminControls';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
+import { configureSMTPNotifier } from 'app/gen-server/lib/configureSMTPNotifier';
 import { configureTestNotifier } from 'app/gen-server/lib/configureTestNotifier';
+import { configureAssistant } from 'app/server/lib/configureAssistant';
 import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/server/lib/configureAzureExternalStorage';
 import { configureEnterpriseAuditLogger } from 'app/server/lib/configureEnterpriseAuditLogger';
 import { checkMinIOExternalStorage, configureMinIOExternalStorage } from 'app/server/lib/configureMinIOExternalStorage';
@@ -43,12 +45,16 @@ class EnterpriseCreate extends BaseCreate {
     return new Activation(dbManager, gristServer);
   }
   public override Notifier(dbManager: HomeDBManager, gristServer: GristServer): INotifier {
-    return configureTestNotifier(dbManager, gristServer) ||
-        configureSendGridNotifier(dbManager, gristServer) ||
-        EmptyNotifier;
+    return configureSMTPNotifier(dbManager, gristServer) ||
+      configureTestNotifier(dbManager, gristServer) ||
+      configureSendGridNotifier(dbManager, gristServer) ||
+      EmptyNotifier;
   }
   public override AuditLogger(dbManager: HomeDBManager, gristServer: GristServer) {
     return configureEnterpriseAuditLogger(dbManager, gristServer);
+  }
+  public override Assistant() {
+    return configureAssistant();
   }
   public override getLoginSystem(): Promise<GristLoginSystem> {
     return getLoginSystem();

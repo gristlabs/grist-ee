@@ -27,16 +27,18 @@ export interface Mailer<T> {
   label: string;
 }
 
+export interface Person {
+  name: string,
+  email: string,
+}
+
 export interface NotifierToolsOptions {
   unsubscribeGroup?: {
     billingManagers?: number,
     invites?: number,
   };
   address: {
-    from: {
-      name: string,
-      email: string,
-    }
+    from: Person
   };
 }
 
@@ -433,6 +435,7 @@ export class NotifierTools {
         dynamic_template_data: templateData ?? {},
       }],
       ...this._withoutUnsubscribe(),
+      template_name: templateId,
     };
   }
 
@@ -494,7 +497,7 @@ export class NotifierBase implements INotifier {
                                    config.options);
   }
 
-  public async applyNotification(_mail: Mailer<SendGridMail>) {
+  public async applyNotification(_eventName: keyof INotifier, _mail: Mailer<SendGridMail>) {
     // nothing to do, by default.
   }
 
@@ -505,6 +508,7 @@ export class NotifierBase implements INotifier {
   private _wrapEvent<Name extends keyof INotifier>(eventName: Name): INotifier[Name] {
     return (async (...args: any[]) => {
       await this.applyNotification(
+        eventName,
         await (this._tool[eventName as keyof NotifierTools] as any)(...args)
       );
     }) as INotifier[Name];
