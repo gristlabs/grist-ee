@@ -1,22 +1,25 @@
-Membership has changed for {{org.name}}
+{{#if paidPlan}} {{/if}}
 
+****************************************
 Membership has changed for {{org.name}}.
+****************************************
 
-{{#added}}
- User {{name}} {{email}} was added.
- {{/added}}
- {{#removed}}
- User {{name}} {{email}} was removed.
- {{/removed}}
+{{#added}} * User {{name}} {{email}} was added.
+{{/added}} {{#removed}} * User {{name}} {{email}} was removed.
+{{/removed}}
+
+{{#if paidPlan}}
 
 The price of your plan is determined by the number of users, which is now {{countAfter}}.
 
+{{/if}}
+
+-----------------
 {{resource.name}}
+-----------------
 
-This change was initiated by {{initiatingUser.name}} ({{initiatingUser.email}})
+This change was initiated by *{{initiatingUser.name}}* ({{initiatingUser.email}})
 
-VIEW BILLING INFORMATION {{{billingUrl}}}
+VIEW BILLING INFORMATION ( {{{billingUrl}}} )
 
-© 2019 Grist Labs. All rights reserved.
-
-379 W Broadway, New York, NY 10012
+© 2025 Grist Labs.

@@ -6,4 +6,4 @@ Your Grist account is no longer protected with two-factor authentication. When s
 
 If you did not make this change, please contact support@getgrist.com.
 
-© 2022 Grist Labs.
+© 2025 Grist Labs.

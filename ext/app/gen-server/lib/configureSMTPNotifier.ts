@@ -1,6 +1,7 @@
 import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
 import {Person} from 'app/gen-server/lib/NotifierTools';
 import {SMTPNotifier} from 'app/gen-server/lib/SMTPNotifier';
+import {appSettings} from 'app/server/lib/AppSettings';
 import {GristServer} from 'app/server/lib/GristServer';
 import log from 'app/server/lib/log';
 
@@ -12,11 +13,22 @@ export function configureSMTPNotifier(dbManager: HomeDBManager, gristServer: Gri
     return undefined;
   }
   try{
-    const smtpSender = parseSender(process.env.GRIST_NODEMAILER_SENDER);
-    // The SMTPNotifier class will verify itself if this JSON config works
-    const smtpConfig = JSON.parse(process.env.GRIST_NODEMAILER_CONFIG) as TransportOptions;
+    // e.g. {"name": "Chimpy", "email": "chimpy@getgrist.com"}
+    const smtpSender = parseSender(
+      appSettings.section("notifications").flag("nodemailerSender").requireString({
+        envVar: 'GRIST_NODEMAILER_SENDER'
+      })
+    );
+    // The SMTPNotifier class will verify itself if this JSON config
+    // works for Nodemailer. See Nodemailer's transport docs:
+    // https://nodemailer.com/transports/
+    const smtpConfig = JSON.parse(
+      appSettings.section("notifications").flag("nodemailerConfig").requireString({
+        envVar: 'GRIST_NODEMAILER_CONFIG',
+        censor: true,
+      })
+    ) as TransportOptions;
 
-    if (!smtpConfig || !smtpSender) { return undefined; }
     return new SMTPNotifier(smtpConfig, {
       dbManager, gristServer, options: {
         address: {
@@ -26,7 +38,7 @@ export function configureSMTPNotifier(dbManager: HomeDBManager, gristServer: Gri
     });
   } catch (err) {
     log.error(`SMTPNotifier: error initializing, verify configuration: ${err}`);
-    return undefined;
+    throw err;
   }
 }
 

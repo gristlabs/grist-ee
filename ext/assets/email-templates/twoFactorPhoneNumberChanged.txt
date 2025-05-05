@@ -6,4 +6,4 @@ The phone number used to receive sign-in verification codes was changed.
 
 If you did not make this change, please contact support@getgrist.com.
 
-© 2022 Grist Labs.
+© 2025 Grist Labs.

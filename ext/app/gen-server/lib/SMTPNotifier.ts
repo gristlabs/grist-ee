@@ -1,7 +1,13 @@
+import { appSettings } from 'app/server/lib/AppSettings';
 import log from 'app/server/lib/log';
-import { EventName, TemplateName } from 'app/server/lib/INotifier';
-import { Mailer, NotifierBase, NotifierConfig } from 'app/gen-server/lib/NotifierTools';
+import { getAppPathTo, getAppRoot } from 'app/server/lib/places';
+import { NotifierEventName, TemplateName, TwoFactorEvent } from 'app/gen-server/lib/NotifierTypes';
+import { Mailer, NotifierBase, NotifierConfig, Person } from 'app/gen-server/lib/NotifierTools';
 import { DynamicTemplateData, SendGridMail } from 'app/gen-server/lib/NotifierTypes';
+
+// This import runs code to register a few extra Handlebars helpers
+// needed for parity with the template features we use with SendGrid.
+import 'app/gen-server/lib/HandlebarsHelpers';
 
 import * as fse from 'fs-extra';
 import * as nodemailer from 'nodemailer';
@@ -16,14 +22,21 @@ interface CompiledTemplates<T>{
 export class SMTPNotifier extends NotifierBase {
   private _templates: { [Key in TemplateName as string]: CompiledTemplates<DynamicTemplateData> };
   private _transporter: nodemailer.Transporter;
+  private _configurationWorks: Promise<boolean>;
 
   constructor(smtpConfig: nodemailer.TransportOptions, config: NotifierConfig) {
     super(config);
     this._initTemplates();
-    this._initTransport(smtpConfig);
+    this._configurationWorks = this._initTransport(smtpConfig);
   }
 
-  public async applyNotification(eventName: EventName, mail: Mailer<SendGridMail>) {
+  public async applyNotification(eventName: NotifierEventName, mail: Mailer<SendGridMail>,
+                                 notificationArgs?: any[]) {
+    if (! await this._configurationWorks) {
+      // We have no working configuration, attempt no emails.
+      return;
+    }
+
     const eventTemplateNames = {
       addUser: "invite",
       addBillingManager: "billingManagerInvite",
@@ -39,26 +52,23 @@ export class SMTPNotifier extends NotifierBase {
       testSendGridExtensions: undefined,
     };
 
-    let templateName: string | undefined;
-    if (eventName === "twoFactorStatusChanged") {
-      templateName = mail.content?.template_name;
-    }
-    templateName = eventTemplateNames[eventName];
+    // For the 2FA event, there is a further subtype passed in as the
+    // first argument of the notification function. That argument is
+    // both the event name and the template name.
+    const templateName = (eventName === "twoFactorStatusChanged") ?
+      (notificationArgs![0] as TwoFactorEvent) : eventTemplateNames[eventName];
     if (!templateName) {
-      // Don't have a template for this event, send no emails
+      log.debug(`SMTPNotifier: no template for event ${eventName}, sending no emails`);
       return;
     }
 
     const {subjectTemplate, txtTemplate, htmlTemplate} = this._templates[templateName];
-
     if (mail.content) {
       for(const personalization of mail.content.personalizations) {
         const {to, dynamic_template_data} = personalization;
-        const toField = to.map(person => `${person.name} <${person.email}>`).join(', ');
-        const replyTo = mail.content?.reply_to ?
-          `${mail.content.reply_to.name} <${mail.content.reply_to.email}>`: undefined;
-        const fromField = mail.content?.from ?
-          `${mail.content.from.name} <${mail.content.from.email}>`: undefined;
+        const toField = to.map(gristPersonToAddress);
+        const replyTo = mail.content?.reply_to ? gristPersonToAddress(mail.content.reply_to) : undefined;
+        const fromField = mail.content?.from ? gristPersonToAddress(mail.content.from) : undefined;
 
         const info = await this._transporter.sendMail({
           to: toField,
@@ -74,7 +84,11 @@ export class SMTPNotifier extends NotifierBase {
   }
 
   private _initTemplates() {
-    const templatePath = 'ext/assets/email-templates';
+    const templatePath = appSettings.section("notifications").flag("templatesDir").readString({
+      envVar: "GRIST_SMTP_TEMPLATES_DIR",
+      defaultValue: getAppPathTo(getAppRoot(), 'ext/assets/email-templates'),
+    });
+
     const subjectTemplates = {
       billingManagerInvite: "Grist invite to {{{ resource.name }}}",
       invite: "Grist invite to {{{ resource.name }}}",
@@ -90,25 +104,29 @@ export class SMTPNotifier extends NotifierBase {
     for(const templateName of TemplateName.values) {
       const subjectTemplate = handlebars.compile(subjectTemplates[templateName]);
       const txtTemplate = handlebars.compile(
-        fse.readFileSync(`${templatePath}/${templateName}.txt`)
-          .toString()
+        fse.readFileSync(`${templatePath}/${templateName}.txt`, 'utf8')
       );
       const htmlTemplate = handlebars.compile(
-        fse.readFileSync(`${templatePath}/${templateName}.html`)
-          .toString()
+        fse.readFileSync(`${templatePath}/${templateName}.html`, 'utf8')
       );
       this._templates[templateName] = {subjectTemplate, txtTemplate, htmlTemplate};
     }
   }
 
-  private _initTransport(smtpConfig: nodemailer.TransportOptions) {
+  private async _initTransport(smtpConfig: nodemailer.TransportOptions) {
     this._transporter = nodemailer.createTransport(smtpConfig);
-    this._transporter.verify().then(() => {
+    try {
+      await this._transporter.verify();
       const name = this._transporter.transporter.name;
       log.info(`SMTPNotifier: initialized new transport of type ${name}`);
-    }).catch((err) => {
-      log.error('SMTPNotifier: error initializing');
-      log.error(`SMTPNotifier: ${err}`);
-    });
+      return true;
+    } catch(err)  {
+      log.error('SMTPNotifier: during initialization:', err);
+      return false;
+    }
   }
+}
+
+function gristPersonToAddress(person: Person) {
+  return { name: person.name, address: person.email};
 }

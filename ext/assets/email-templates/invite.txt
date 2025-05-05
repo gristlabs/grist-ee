@@ -1,23 +1,15 @@
-Grist invite to {{resource.name}}
-
+**********************
 Accept your invitation
+**********************
 
-You've been invited by {{host.name}} ({{host.email}}) to
- {{#if access.canEdit}}
- edit
- {{else if access.canView}}
- view
- {{else if access.canManageBilling}}
- manage billing for
- {{/if}}
- the following Grist {{resource.kind}}.
+You've been invited by *{{host.name}}* *({{host.email}})* to {{#if access.canEdit}} *edit* {{else if access.canView}} *view* {{else if access.canManageBilling}} *manage billing* for {{/if}} the following Grist {{resource.kind}}.
 
+-----------------
 {{resource.name}}
+-----------------
 
-{{# if resource.kindUpperFirst}}{{resource.kindUpperFirst}}{{else}}{{resource.kind}}{{/if}} shared with {{user.email}}
+{{# if resource.kindUpperFirst}}{{resource.kindUpperFirst}}{{else}}{{resource.kind}}{{/if}} shared with *{{user.email}}*
 
-OPEN {{resource.kind}} {{{resource.url}}}
+OPEN {{resource.kind}} ( {{{resource.url}}} )
 
-© 2019 Grist Labs. All rights reserved.
-
-379 West Broadway, New York, NY, 10012
+© 2025 Grist Labs.

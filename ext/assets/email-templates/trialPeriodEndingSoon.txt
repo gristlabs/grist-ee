@@ -14,4 +14,4 @@ Now would be a great time to review your billing information and your list of te
 
 REVIEW BILLING INFORMATION ( {{{billingUrl}}} )
 
-© 2022 Grist Labs.
+© 2025 Grist Labs.

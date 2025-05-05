@@ -9,7 +9,7 @@ import { Organization } from 'app/gen-server/entity/Organization';
 import { User } from 'app/gen-server/entity/User';
 import { Workspace } from 'app/gen-server/entity/Workspace';
 import { HomeDBManager, UserChange, UserIdDelta } from "app/gen-server/lib/homedb/HomeDBManager";
-import { SendGridAddress, SendGridBillingTemplate, SendGridInviteResourceKind,
+import { NotifierEventName, SendGridAddress, SendGridBillingTemplate, SendGridInviteResourceKind,
          SendGridInviteTemplate, SendGridMail, SendGridMemberChangeTemplate,
          SendGridPersonalization, TwoFactorEvent } from 'app/gen-server/lib/NotifierTypes';
 import { GristServer } from 'app/server/lib/GristServer';
@@ -329,7 +329,7 @@ export class NotifierTools {
     } : {};
     const mail = await this._buildTwoFactorEmail(
       userId,
-      event,  // crude templateId
+      event,  // the event name maps to the 2FA template names
       templateData);
     return {
       content: mail,
@@ -424,7 +424,7 @@ export class NotifierTools {
    */
   private async _buildTwoFactorEmail(
     userId: number,
-    templateId: string,
+    eventName: TwoFactorEvent,
     templateData?: {[key: string]: any},
   ): Promise<SendGridMail> {
     const {email, name} = await this._dbManager.getFullUser(userId);
@@ -435,7 +435,6 @@ export class NotifierTools {
         dynamic_template_data: templateData ?? {},
       }],
       ...this._withoutUnsubscribe(),
-      template_name: templateId,
     };
   }
 
@@ -497,7 +496,8 @@ export class NotifierBase implements INotifier {
                                    config.options);
   }
 
-  public async applyNotification(_eventName: keyof INotifier, _mail: Mailer<SendGridMail>) {
+  public async applyNotification(_eventName: NotifierEventName, _mail: Mailer<SendGridMail>,
+                                _notificationArgs?: any[]) {
     // nothing to do, by default.
   }
 
@@ -505,11 +505,12 @@ export class NotifierBase implements INotifier {
     // nothing to do, by default.
   }
 
-  private _wrapEvent<Name extends keyof INotifier>(eventName: Name): INotifier[Name] {
+  private _wrapEvent<Name extends NotifierEventName>(eventName: Name): INotifier[Name] {
     return (async (...args: any[]) => {
       await this.applyNotification(
         eventName,
-        await (this._tool[eventName as keyof NotifierTools] as any)(...args)
+        await (this._tool[eventName as keyof NotifierTools] as any)(...args),
+        args
       );
     }) as INotifier[Name];
   }

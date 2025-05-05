@@ -4,4 +4,4 @@ Two-factor authentication enabled.
 
 Your Grist account is now protected with two-factor authentication. When signing in, you'll be prompted to enter a verification code to verify your identity.
 
-© 2022 Grist Labs.
+© 2025 Grist Labs.
