@@ -17,8 +17,7 @@ import { proxyAgent } from "app/server/lib/ProxyAgent";
 import { getOriginIpAddress } from "app/server/lib/requestUtils";
 import { getPubSubPrefix } from "app/server/lib/serverUtils";
 import {
-  getAltSessionId,
-  getFullUser,
+  getAuthSession,
   getLogMeta,
   getRequest,
   RequestOrSession,
@@ -271,7 +270,7 @@ export class AuditLogger implements IAuditLogger {
   }
 
   private _getEventActor(requestOrSession: RequestOrSession): AuditEventActor {
-    const user = getFullUser(requestOrSession);
+    const user = getAuthSession(requestOrSession).fullUser;
     if (!user) {
       return { type: "unknown" };
     } else if (user.id === this._db.getAnonymousUserId()) {
@@ -386,6 +385,6 @@ function getEventContext(
   return {
     ip_address: request ? getOriginIpAddress(request) : undefined,
     user_agent: request?.headers["user-agent"] || undefined,
-    session_id: getAltSessionId(requestOrSession) || undefined,
+    session_id: getAuthSession(requestOrSession).altSessionId || undefined,
   };
 }
