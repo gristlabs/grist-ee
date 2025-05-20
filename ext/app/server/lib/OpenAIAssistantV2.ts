@@ -32,6 +32,7 @@ import {
 import log from "app/server/lib/log";
 import { stringParam } from "app/server/lib/requestUtils";
 import { runSQLQuery } from "app/server/lib/runSQLQuery";
+import fetch from "node-fetch";
 
 export const DEPS = { fetch, delayTime: 1000 };
 
@@ -247,6 +248,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
         messages,
         temperature: 0,
         ...(model ? { model } : undefined),
+        response_format: this._getResponseFormat(),
         tools: this._getTools(),
         user,
         ...(this._maxTokens
@@ -384,6 +386,32 @@ export class OpenAIAssistantV2 implements AssistantV2 {
     return {
       role: "system",
       content,
+    };
+  }
+
+  private _getResponseFormat() {
+    return {
+      type: "json_schema",
+      json_schema: {
+        name: "response",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            response_text: {
+              type: "string",
+            },
+            confirmation_required: {
+              type: "boolean",
+            },
+          },
+          required: [
+            "response_text",
+            "confirmation_required",
+          ],
+          additionalProperties: false,
+        },
+      },
     };
   }
 
@@ -807,10 +835,12 @@ export class OpenAIAssistantV2 implements AssistantV2 {
     appliedActions?: ApplyUAResult[]
   ): AssistanceResponseV2 {
     const { content } = completion.choice.message;
+    const { response_text, confirmation_required } = JSON.parse(content);
     return {
-      reply: content,
+      reply: response_text,
       state: completion.state,
       appliedActions,
+      confirmationRequired: confirmation_required,
     };
   }
 }
