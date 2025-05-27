@@ -1,8 +1,10 @@
+import {isAffirmative} from 'app/common/gutil';
 import { Activation } from 'app/gen-server/lib/Activation';
 import { addAdminControlsEndpoints } from 'app/gen-server/lib/AdminControls';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
 import { configureSMTPNotifier } from 'app/gen-server/lib/configureSMTPNotifier';
 import { configureTestNotifier } from 'app/gen-server/lib/configureTestNotifier';
+import {NotificationsConfig} from 'app/gen-server/lib/NotificationsConfig';
 import { configureAssistant } from 'app/server/lib/configureAssistant';
 import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/server/lib/configureAzureExternalStorage';
 import { configureEnterpriseAuditLogger } from 'app/server/lib/configureEnterpriseAuditLogger';
@@ -60,6 +62,9 @@ class EnterpriseCreate extends BaseCreate {
     return getLoginSystem();
   }
   public override addExtraHomeEndpoints(gristServer: GristServer, app: Express): void {
+    if (isAffirmative(process.env.GRIST_TEST_ENABLE_NOTIFICATIONS)) {
+      NotificationsConfig.addEndpoints(gristServer.getHomeDBManager(), app);
+    }
     addAdminControlsEndpoints(gristServer.getHomeDBManager(), gristServer, app);
   }
   public override areAdminControlsAvailable(): boolean { return true; }

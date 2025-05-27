@@ -4,7 +4,8 @@
     "@types/nodemailer": "^6.4.17",
     "aws-sdk": "2.1061.0",
     "handlebars": "^4.7.8",
-    "nodemailer": "^6.10.0"
+    "nodemailer": "^6.10.0",
+    "perfect-debounce": "1.0.0"
   },
   "devDependencies": {}
 }
