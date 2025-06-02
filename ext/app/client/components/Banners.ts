@@ -21,15 +21,22 @@ import {DocUsageBanner} from 'app/client/components/DocUsageBanner';
 import {SiteUsageBanner} from 'app/client/components/SiteUsageBanner';
 import {AppModel} from 'app/client/models/AppModel';
 import {DocPageModel} from 'app/client/models/DocPageModel';
+import {VersionUpdateBanner} from 'app/client/components/VersionUpdateBanner';
 import {dom} from 'grainjs';
 import {createEnterpriseSpecificFunc} from "app/client/lib/enterpriseDeploymentCheck";
 
 const EEBanners = {
   buildHomeBanners(app: AppModel) {
-    return buildActivationBanner(app) || dom.create(SiteUsageBanner, app);
+    return buildActivationBanner(app) || [
+      dom.create(SiteUsageBanner, app),
+      dom.create(VersionUpdateBanner, app)
+    ];
   },
   buildDocumentBanners(docPageModel: DocPageModel) {
-    return buildActivationBanner(docPageModel.appModel) || dom.create(DocUsageBanner, docPageModel);
+    return buildActivationBanner(docPageModel.appModel) || [
+      dom.create(DocUsageBanner, docPageModel),
+      dom.create(VersionUpdateBanner, docPageModel.appModel)
+    ];
   }
 };
 

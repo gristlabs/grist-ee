@@ -2,6 +2,7 @@ import {Banner, buildBannerMessage} from 'app/client/components/Banner';
 import {buildUpgradeMessage} from 'app/client/components/DocumentUsage';
 import {sessionStorageBoolObs} from 'app/client/lib/localStorageObs';
 import {AppModel} from 'app/client/models/AppModel';
+import {OrgUsageSummary} from 'app/common/DocUsage';
 import {isFreePlan} from 'app/common/Features';
 import {isOwner} from 'app/common/roles';
 import {Disposable, dom, makeTestId, Observable} from 'grainjs';
@@ -30,9 +31,9 @@ export class SiteUsageBanner extends Disposable {
 
   public buildDom() {
     return dom.maybe(this._currentOrgUsage, (usage) => {
-      const {approachingLimit, gracePeriod, deleteOnly} = usage;
-      if (deleteOnly > 0 || gracePeriod > 0) {
-        return this._buildExceedingLimitsBanner(deleteOnly + gracePeriod);
+      const {approachingLimit, gracePeriod, deleteOnly} = usage.countsByDataLimitStatus;
+      if (deleteOnly > 0 || gracePeriod > 0 || usage.attachments.limitExceeded) {
+        return this._buildExceedingLimitsBanner(usage);
       } else if (approachingLimit > 0) {
         return this._buildApproachingLimitsBanner(approachingLimit);
       } else {
@@ -66,10 +67,17 @@ export class SiteUsageBanner extends Disposable {
     });
   }
 
-  private _buildExceedingLimitsBanner(numDocs: number) {
-    const limitsMessage = numDocs > 1
+  private _buildExceedingLimitsBanner(usage: OrgUsageSummary) {
+    const numDocs = usage.countsByDataLimitStatus.gracePeriod +
+        usage.countsByDataLimitStatus.deleteOnly;
+    const docLimitsMessage = numDocs > 1
       ? `${numDocs} documents have exceeded their limits.`
       : `${numDocs} document has exceeded its limits.`;
+    const limitsMessage = usage.attachments.limitExceeded
+        ? (numDocs === 0
+            ? `Site attachment limit exceeded.`
+            : `Multiple limits exceeded.`)
+        : docLimitsMessage;
     return dom.create(Banner, {
       content: buildBannerMessage(
         limitsMessage,
