@@ -13,7 +13,7 @@ import {
 import { AuditEventFormatter } from "app/server/lib/AuditEventFormatter";
 import { AuditEventProperties, IAuditLogger } from "app/server/lib/IAuditLogger";
 import { LogMethods } from "app/server/lib/LogMethods";
-import { proxyAgent } from "app/server/lib/ProxyAgent";
+import { fetchUntrustedWithAgent } from "app/server/lib/ProxyAgent";
 import { getOriginIpAddress } from "app/server/lib/requestUtils";
 import { getPubSubPrefix } from "app/server/lib/serverUtils";
 import {
@@ -23,7 +23,6 @@ import {
   RequestOrSession,
 } from "app/server/lib/sessionUtils";
 import moment from "moment-timezone";
-import fetch from "node-fetch";
 import { AbortSignal } from "node-fetch/externals";
 import { createClient, RedisClient } from "redis";
 import { inspect } from "util";
@@ -228,14 +227,13 @@ export class AuditLogger implements IAuditLogger {
     const { url, token } = destination;
     try {
       this._numPendingRequests += 1;
-      const resp = await fetch(url, {
+      const resp = await fetchUntrustedWithAgent(url, {
         method: "POST",
         headers: {
           ...(token ? { Authorization: token } : undefined),
           "Content-Type": "application/json",
         },
         body: this._buildStreamingDestinationPayload(event, destination),
-        agent: proxyAgent(new URL(url)),
         timeout: 10_000,
         signal: this._abortController.signal as AbortSignal,
       });
