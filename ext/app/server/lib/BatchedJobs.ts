@@ -23,9 +23,6 @@ import {GristBullMQJobs, GristBullMQQueueScope, GristJob} from 'app/server/lib/G
 import * as log from 'app/server/lib/log';
 import {popFromMap} from 'app/common/gutil';
 import {Redis} from 'ioredis';
-import {debuglog} from 'util';
-
-const debug = debuglog('batchedjobs');
 
 export interface Schedule {
   type: string;
@@ -53,7 +50,7 @@ export class BatchedJobs {
 
   constructor(
     jobs: GristBullMQJobs,
-    private _queue: GristBullMQQueueScope,
+    public readonly queue: GristBullMQQueueScope,
     private _name: string,
     private _types: {[jobType: string]: Schedule},
   ) {
@@ -64,10 +61,12 @@ export class BatchedJobs {
    * This should only get called once, by a server that can handle such jobs.
    */
   public setHandler(handler: Handler) {
-    this._queue.handleName(this._name, this._handleJob.bind(this, handler));
-    const worker = this._queue.getWorker();
+    this.queue.handleName(this._name, this._handleJob.bind(this, handler));
+    const worker = this.queue.getWorker();
     if (!worker) { throw new Error('BatchedJobs.setHandler: queue.handleDefault must be called first'); }
-    worker.on('completed', (job) => popFromMap(this._toReschedule, job.id!)?.());
+    worker.on('completed', (job) => popFromMap(this._toReschedule, job.id)?.());
+    worker.on('failed', async (job, err) => { log.error(`BatchedJobs job ${job?.id} failed`, err); });
+    worker.on('error', (err) => { log.error("BatchdJobs error", err); });
   }
 
   /**
@@ -77,7 +76,7 @@ export class BatchedJobs {
     const schedule = this._types[jobType];
     if (!schedule) { throw new Error(`Unknown job type ${jobType}`); }
     const jobId = getJobId(schedule, batchKey);
-    if (debug.enabled) { log.debug('adding job', jobId); }
+    log.debug('BatchedJobs adding job', jobId);
     const newCount = await this._redis.rpush(getPayloadKey(jobId), data);
     if (newCount === 1) {
       // When newCount > 1, we know this jobId is already scheduled, so this call will be a no-op.
@@ -87,14 +86,15 @@ export class BatchedJobs {
 
   private async _handleJob(handler: Handler, job: GristJob): Promise<void> {
     const {jobId, jobType, batchKey} = job.data;
-    if (debug.enabled) { log.debug('handling job', jobId); }
+    log.debug('BatchedJobs handling job', jobId);
     const batchedData = await this._redis.lpop(getPayloadKey(jobId), batchUpperBound);
     if (batchedData?.length) {
       const schedule = this._types[jobType];
       await handler(jobType, batchKey, batchedData);
 
       // Reschedule this job using 'throttle' delay, which subsequent add()s will respect. We
-      // can't do it here, so tell the 'completed' handler to finish this scheduling.
+      // can't do it here (while the job is running), so we tell the 'completed' handler to finish
+      // this scheduling.
       //
       // Note a low-risk race condition: an add() between this handler finishing and the 'completed'
       // callback may add a job with 'firstDelay' (instead of the desired 'throttle' delay).
@@ -103,7 +103,7 @@ export class BatchedJobs {
   }
 
   private async _addJob(info: {jobId: string, jobType: string, batchKey: string}, delay: number) {
-    await this._queue.add(this._name, info, {
+    await this.queue.add(this._name, info, {
       jobId: info.jobId,
       delay,
       removeOnComplete: true,

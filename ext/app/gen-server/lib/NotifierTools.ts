@@ -27,18 +27,13 @@ export interface Mailer<T> {
   label: string;
 }
 
-export interface Person {
-  name: string,
-  email: string,
-}
-
 export interface NotifierToolsOptions {
   unsubscribeGroup?: {
     billingManagers?: number,
     invites?: number,
   };
   address: {
-    from: Person
+    from: SendGridAddress
   };
 }
 
@@ -48,12 +43,18 @@ export interface NotifierConfig {
   options: NotifierToolsOptions;
 }
 
+type INotifierTools = {
+  [K in keyof INotifier]?: INotifier[K] extends (...args: infer A) => Promise<void>
+    ? (...args: A) => Promise<Mailer<SendGridMail>>
+    : never;
+};
+
 /**
  * This takes NotifiableActions and expands the information
  * provided into everything needed for a complete email
  * notification.
  */
-export class NotifierTools {
+export class NotifierTools implements INotifierTools {
   private _gristConfig: GristLoadConfig;
   private _homeUrl: string;
 
@@ -127,12 +128,7 @@ export class NotifierTools {
         }
       };
       personalizations.push({
-        to: [
-          {
-            email: user.email,
-            name: user.name
-          }
-        ],
+        to: [this._asSendGridAddress(user)],
         dynamic_template_data: template
       });
     }
@@ -245,12 +241,7 @@ export class NotifierTools {
       }
     };
     const personalizations = [{
-      to: [
-        {
-          email: user.email,
-          name: user.name
-        }
-      ],
+      to: [this._asSendGridAddress(user)],
       dynamic_template_data: template
     }];
     const unsubscribeGroupId = this._options.unsubscribeGroup?.invites;
@@ -337,6 +328,20 @@ export class NotifierTools {
     };
   }
 
+  public async docNotification(userId: number, templateData: object) {
+    const user = await this._dbManager.getFullUser(userId);
+    const personalizations = [{
+      to: [this._asSendGridAddress(user)],
+      dynamic_template_data: templateData
+    }];
+    const mail: SendGridMail = {...this._fromGrist(), personalizations};
+    return {
+      logging: [async () => { log.debug(`notifications: sending docNotification`); }],
+      content: mail,
+      label: 'docNotification',
+    };
+  }
+
   /**
    * Compile a list of billing managers in a format compatible with SendGrid api.
    */
@@ -368,7 +373,7 @@ export class NotifierTools {
   private _fromGristUser(sender: FullUser): Pick<SendGridMail, 'from'|'reply_to'> {
     return {
       from: {...this._options.address.from, name: `${sender.name} (via Grist)`},
-      reply_to: {email: sender.email, name: sender.name},
+      reply_to: this._asSendGridAddress(sender),
     };
   }
 
@@ -487,8 +492,9 @@ export class NotifierBase implements INotifier {
   public scheduledCall = this._wrapEvent('scheduledCall');
   public streamingDestinationsChange = this._wrapEvent('streamingDestinationsChange');
   public twoFactorStatusChanged = this._wrapEvent('twoFactorStatusChanged');
+  public docNotification = this._wrapEvent('docNotification');
 
-  private _tool: NotifierTools;
+  private _tool: INotifierTools;
 
   public constructor(config: NotifierConfig) {
     this._tool = new NotifierTools(config.gristServer,
@@ -505,13 +511,14 @@ export class NotifierBase implements INotifier {
     // nothing to do, by default.
   }
 
-  private _wrapEvent<Name extends NotifierEventName>(eventName: Name): INotifier[Name] {
+  private _wrapEvent<Name extends NotifierEventName & keyof INotifierTools>(eventName: Name): INotifier[Name] {
     return (async (...args: any[]) => {
-      await this.applyNotification(
-        eventName,
-        await (this._tool[eventName as keyof NotifierTools] as any)(...args),
-        args
-      );
+      const mailer = await this._tool[eventName]?.(...args);
+      if (mailer) {
+        await this.applyNotification(eventName, mailer, args);
+      } else {
+        log.warn(`NotifierTools: missing implementation for event ${eventName}`);
+      }
     }) as INotifier[Name];
   }
 }

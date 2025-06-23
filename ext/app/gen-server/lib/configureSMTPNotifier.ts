@@ -1,5 +1,5 @@
 import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
-import {Person} from 'app/gen-server/lib/NotifierTools';
+import {SendGridAddress} from 'app/gen-server/lib/NotifierTypes';
 import {SMTPNotifier} from 'app/gen-server/lib/SMTPNotifier';
 import {appSettings} from 'app/server/lib/AppSettings';
 import {GristServer} from 'app/server/lib/GristServer';
@@ -42,7 +42,7 @@ export function configureSMTPNotifier(dbManager: HomeDBManager, gristServer: Gri
   }
 }
 
-function parseSender(sender: string): Person {
+function parseSender(sender: string): SendGridAddress {
   const json = JSON.parse(sender);
   for(const key of ["name", "email"]) {
     if(typeof json[key] !== "string") {

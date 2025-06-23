@@ -1,0 +1,28 @@
+# FROM: Grist
+# SUBJECT: Updates to {{docTitle}}
+
+Document {{docTitle}} was changed.
+
+{{#each authors}}
+  - {{this.user.name}} made changes
+      {{~#notEquals (length this.tables) 0~}}
+        to
+        {{~#equals (length this.tables) 1~}}
+          {{this.tables.[0]}}
+        {{~else}}{{#equals (length this.tables) 2~}}
+          {{this.tables.[0]}} and {{this.tables.[1]}}
+        {{~else}}{{#equals (length this.tables) 3~}}
+          {{this.tables.[0]}}, {{this.tables.[1]}}, and {{this.tables.[2]}}
+        {{~else~}}
+          {{this.tables.[0]}}, {{this.tables.[1]}}, and {{this.numTablesMinus2}} others
+        {{~/equals}}{{/equals}}{{/equals~}}.
+      {{~/notEquals}}
+
+{{/each}}
+
+[Open document]({{docUrl}})
+
+{{#if unsubscribeUrl }}
+  You received this email because you subscribed to notifications of changes to {{docTitle}}.
+  [Unsubscribe from this document.]({{unsubscribeUrl}})
+{{/if}}

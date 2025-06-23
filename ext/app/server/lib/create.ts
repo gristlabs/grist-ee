@@ -4,7 +4,7 @@ import { addAdminControlsEndpoints } from 'app/gen-server/lib/AdminControls';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
 import { configureSMTPNotifier } from 'app/gen-server/lib/configureSMTPNotifier';
 import { configureTestNotifier } from 'app/gen-server/lib/configureTestNotifier';
-import {NotificationsConfig} from 'app/gen-server/lib/NotificationsConfig';
+import { createDocNotificationManager } from 'app/gen-server/lib/DocNotificationManager';
 import { configureAssistant } from 'app/server/lib/configureAssistant';
 import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/server/lib/configureAzureExternalStorage';
 import { configureEnterpriseAuditLogger } from 'app/server/lib/configureEnterpriseAuditLogger';
@@ -62,12 +62,14 @@ class EnterpriseCreate extends BaseCreate {
     return getLoginSystem();
   }
   public override addExtraHomeEndpoints(gristServer: GristServer, app: Express): void {
-    if (isAffirmative(process.env.GRIST_TEST_ENABLE_NOTIFICATIONS)) {
-      NotificationsConfig.addEndpoints(gristServer.getHomeDBManager(), app);
-    }
     addAdminControlsEndpoints(gristServer.getHomeDBManager(), gristServer, app);
   }
   public override areAdminControlsAvailable(): boolean { return true; }
+  public override createDocNotificationManager(gristServer: GristServer) {
+    if (isAffirmative(process.env.GRIST_TEST_ENABLE_NOTIFICATIONS)) {
+      return createDocNotificationManager(gristServer);
+    }
+  }
 }
 
 export const create: ICreate = isRunningEnterprise() ? new EnterpriseCreate() : new CoreCreate();

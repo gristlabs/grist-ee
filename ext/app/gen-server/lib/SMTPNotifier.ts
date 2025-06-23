@@ -2,8 +2,8 @@ import { appSettings } from 'app/server/lib/AppSettings';
 import log from 'app/server/lib/log';
 import { getAppPathTo, getAppRoot } from 'app/server/lib/places';
 import { NotifierEventName, TemplateName, TwoFactorEvent } from 'app/gen-server/lib/NotifierTypes';
-import { Mailer, NotifierBase, NotifierConfig, Person } from 'app/gen-server/lib/NotifierTools';
-import { DynamicTemplateData, SendGridMail } from 'app/gen-server/lib/NotifierTypes';
+import { Mailer, NotifierBase, NotifierConfig } from 'app/gen-server/lib/NotifierTools';
+import { DynamicTemplateData, SendGridAddress, SendGridMail } from 'app/gen-server/lib/NotifierTypes';
 
 // This import runs code to register a few extra Handlebars helpers
 // needed for parity with the template features we use with SendGrid.
@@ -50,6 +50,7 @@ export class SMTPNotifier extends NotifierBase {
       streamingDestinationsChange: undefined,
       twoFactorStatusChanged: undefined,
       testSendGridExtensions: undefined,
+      docNotification: undefined,
     };
 
     // For the 2FA event, there is a further subtype passed in as the
@@ -127,6 +128,6 @@ export class SMTPNotifier extends NotifierBase {
   }
 }
 
-function gristPersonToAddress(person: Person) {
+function gristPersonToAddress(person: SendGridAddress) {
   return { name: person.name, address: person.email};
 }
