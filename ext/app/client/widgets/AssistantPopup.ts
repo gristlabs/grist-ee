@@ -231,16 +231,21 @@ function buildIntroMessage(...args: DomElementArg[]) {
       ),
       cssAiMessageList(
         cssAiMessageListItem(
-          inlineMarkdown(t(
-            "I **can** answer questions about your data, create or modify " +
-              "records, and help with formulas. I also know which page you're viewing."
-          ))
+          inlineMarkdown(
+            t(
+              "I **can** answer questions about your data, create or modify " +
+                "tables, columns, or records, and help with formulas. " +
+                "I also know which page you're viewing."
+            )
+          )
         ),
         cssAiMessageListItem(
-          inlineMarkdown(t(
-            "I **can't** create or modify tables, columns, views, or access " +
-              "rules. I also don't know if you've selected something."
-          ))
+          inlineMarkdown(
+            t(
+              "I **can't** create or modify pages, widgets, or access rules. " +
+                "I also don't know if you've selected something."
+            )
+          )
         ),
         cssAiMessageListItem(
           t(

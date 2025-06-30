@@ -6,8 +6,15 @@ import {
 } from "app/common/Assistance";
 import { AssistantProvider } from "app/common/Assistant";
 import { delay } from "app/common/delay";
-import { CellValue, getColValues, RowRecord } from "app/common/DocActions";
+import {
+  CellValue,
+  getColValues,
+  RowRecord,
+  UserAction,
+} from "app/common/DocActions";
+import { getReferencedTableId, RecalcWhen } from "app/common/gristTypes";
 import { safeJsonParse } from "app/common/gutil";
+import { RecordWithStringId } from "app/plugin/DocApiTypes";
 import { arrayRepeat } from "app/plugin/gutil";
 import {
   handleSandboxErrorOnPlatform,
@@ -36,11 +43,96 @@ import {
 import log from "app/server/lib/log";
 import { stringParam } from "app/server/lib/requestUtils";
 import { runSQLQuery } from "app/server/lib/runSQLQuery";
-import { pick } from "lodash";
+import { isEmpty, pick } from "lodash";
 import moment from "moment";
 import fetch from "node-fetch";
 
 export const DEPS = { fetch, delayTime: 1000 };
+
+// TODO: move this to a common location.
+// Perhaps merge it with the one in DocData.ts?
+interface ColInfo {
+  colId: string;
+  type: string;
+  label: string;
+  isFormula: boolean;
+  formula: string;
+  description: string;
+  recalcDeps: number[] | null;
+  recalcWhen: RecalcWhen;
+  visibleCol: number;
+  untieColIdFromLabel: boolean;
+  widgetOptions: string;
+}
+
+// TODO: use ts-interface-checker or Zod to generate and enforce these types.
+interface AddColumnOptions {
+  id?: string;
+  type?: string;
+  label?: string;
+  formula?: string;
+  description?: string;
+  formula_type?: "regular" | "trigger";
+  untie_col_id_from_label?: boolean;
+  text_format?: "text" | "markdown" | "hyperlink";
+  number_show_spinner?: boolean;
+  number_format?: "text" | "currency" | "decimal" | "percent" | "scientific";
+  number_currency_code?: string | null;
+  number_minus_sign?: "minus" | "parens";
+  number_min_decimals?: number;
+  number_max_decimals?: number;
+  toggle_format?: "text" | "checkbox" | "switch";
+  reference_table_id?: string;
+  date_format?:
+    | "YYYY-MM-DD"
+    | "MM-DD-YYYY"
+    | "MM/DD/YYYY"
+    | "MM-DD-YY"
+    | "MM/DD/YY"
+    | "DD MMM YYYY"
+    | "MMMM Do, YYYY"
+    | "DD-MM-YYYY"
+    | "custom";
+  date_custom_format?: string;
+  time_format?:
+    | "h:mma"
+    | "h:mma z"
+    | "HH:mm"
+    | "HH:mm z"
+    | "HH:mm:ss"
+    | "HH:mm:ss z"
+    | "custom";
+  time_custom_format?: string;
+  timezone?: string;
+  attachment_height?: number;
+  choices?: string[];
+  choice_styles?: Record<string, any>;
+  cell_text_color?: string;
+  cell_fill_color?: string;
+  cell_bold?: boolean;
+  cell_underline?: boolean;
+  cell_italic?: boolean;
+  cell_strikethrough?: boolean;
+  header_text_color?: string;
+  header_fill_color?: string;
+  header_bold?: boolean;
+  header_underline?: boolean;
+  header_italic?: boolean;
+  header_strikethrough?: boolean;
+  text_alignment?: "left" | "center" | "right";
+  text_wrap?: boolean;
+  conditional_formatting_rules?: unknown[];
+}
+
+interface UpdateColumnOptions extends AddColumnOptions {
+  reference_show_column_id?: string;
+  formula_recalc_behavior?:
+    | "add-record"
+    | "add-or-update-record"
+    | "custom"
+    | "never";
+  formula_recalc_col_ids?: string[];
+}
 
 /**
  * A flavor of assistant for use with the OpenAI chat completion endpoint
@@ -128,7 +220,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
         version: 2,
         conversationId: request.conversationId,
         context: request.context,
-        message: {
+        response: {
           index: response.state?.messages
             ? response.state.messages.length - 1
             : -1,
@@ -213,7 +305,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
     const { docSession, doc, request, messages } = options;
     const { conversationId, state } = request;
     const oldMessages = state?.messages ?? [];
-    const start = oldMessages.length;
+    const start = oldMessages.length > 0 ? oldMessages.length - 1 : 0;
     const newMessages = messages.slice(start);
     for (const [index, { role, content }] of newMessages.entries()) {
       doc.logTelemetryEvent(docSession, "assistantSend", {
@@ -395,6 +487,8 @@ Only records, columns, or tables can be modified.
 When setting choice_styles, only use values like:
 \`{"Choice 1": {"textColor": "#FFFFFF", "fillColor": "#16B378",
 "fontUnderline": false, "fontItalic": false, "fontStrikethrough": false}}\`
+conditional_formatting_rules is not yet supported. Tell users to
+configure it manually from the creator panel, below "Cell Style".
 Use values appropriate for each column's type (see table below).
 Prefix lists with an "L" element (e.g., \`["L", 1, 2, 3]\`).
 
@@ -403,7 +497,7 @@ Prefix lists with an "L" element (e.g., \`["L", 1, 2, 3]\`).
 | Any         | any          | Any value                                            | \`"Alice"\`, \`123\`, \`true\` |
 | Text        | string       | Plain text                                           | \`"Bob"\`                      |
 | Numeric     | number       | Floating point number                                | \`3.14\`                       |
-| Int         | number       | Whole number                                         | \`42\`                         |
+| Int         | number       | Whole number                                         | \`42\`, \`3.0\`                |
 | Bool        | boolean      | \`true\` or \`false\`                                | \`false\`                      |
 | Date        | number       | Unix timestamp in seconds                            | \`946771200\`                  |
 | DateTime    | number       | Unix timestamp in seconds                            | \`1748890186\`                 |
@@ -652,11 +746,128 @@ ${
                     ],
                     description: "The column type.",
                   },
+                  text_format: {
+                    type: "string",
+                    enum: ["text", "markdown", "hyperlink"],
+                    description:
+                      "The format of Text columns. " +
+                      "If unset, defaults to text.",
+                  },
+                  number_show_spinner: {
+                    type: "boolean",
+                    description:
+                      "Whether to show increment/decrement buttons. " +
+                      "If unset, defaults to false.",
+                  },
+                  number_format: {
+                    type: "string",
+                    enum: [
+                      "text",
+                      "currency",
+                      "decimal",
+                      "percent",
+                      "scientific",
+                    ],
+                    description:
+                      "The format of Int and Numeric columns. " +
+                      "If unset, defaults to text.",
+                  },
+                  number_currency_code: {
+                    type: ["string", "null"],
+                    description:
+                      "ISO 4217 currency code (e.g. 'USD', 'GBP', 'JPY'). " +
+                      "Uses the document's currency if null or unset. " +
+                      "Only applies if number_format is currency.",
+                  },
+                  number_minus_sign: {
+                    type: "string",
+                    enum: ["minus", "parens"],
+                    description:
+                      "How to format negative numbers. " +
+                      "If unset, defaults to minus.",
+                  },
+                  number_min_decimals: {
+                    type: "number",
+                    description:
+                      "Minimum number of decimals for Int and Numeric columns.",
+                    minimum: 0,
+                    maximum: 20,
+                  },
+                  number_max_decimals: {
+                    type: "number",
+                    description:
+                      "Maximum number of decimals for Int and Numeric columns.",
+                    minimum: 0,
+                    maximum: 20,
+                  },
+                  toggle_format: {
+                    type: "string",
+                    enum: ["text", "checkbox", "switch"],
+                    description:
+                      "The format of Bool/Toggle columns. " +
+                      "If unset, defaults to checkbox.",
+                  },
                   reference_table_id: {
                     type: "string",
                     description:
                       "The ID of the referenced table. " +
                       "Required if type is Ref or RefList.",
+                  },
+                  date_format: {
+                    type: "string",
+                    enum: [
+                      "YYYY-MM-DD",
+                      "MM-DD-YYYY",
+                      "MM/DD/YYYY",
+                      "MM-DD-YY",
+                      "MM/DD/YY",
+                      "DD MMM YYYY",
+                      "MMMM Do, YYYY",
+                      "DD-MM-YYYY",
+                      "custom",
+                    ],
+                    description:
+                      "The date format of Date and DateTime columns. " +
+                      "If custom, date_custom_format must be set.",
+                  },
+                  date_custom_format: {
+                    type: "string",
+                    description:
+                      "A Moment.js date format string (e.g. 'ddd, hA'). " +
+                      "Only applied if date_format is custom.",
+                  },
+                  time_format: {
+                    type: "string",
+                    enum: [
+                      "h:mma",
+                      "h:mma z",
+                      "HH:mm",
+                      "HH:mm z",
+                      "HH:mm:ss",
+                      "HH:mm:ss z",
+                      "custom",
+                    ],
+                    description:
+                      "The time format of DateTime columns. " +
+                      "If custom, time_custom_format must be set.",
+                  },
+                  time_custom_format: {
+                    type: "string",
+                    description:
+                      "A Moment.js time format string (e.g. 'h:mm a'). " +
+                      "Only applied if time_format is custom.",
+                  },
+                  timezone: {
+                    type: "string",
+                    description:
+                      "The IANA TZ identifier (e.g. 'America/New_York') for DateTime columns. " +
+                      "If unset, the document's timezone will be used.",
+                  },
+                  attachment_height: {
+                    type: "number",
+                    description: "Height of attachment thumbnails in pixels. ",
+                    minimum: 16,
+                    maximum: 96,
                   },
                   label: {
                     type: "string",
@@ -672,7 +883,10 @@ ${
                     type: ["string", "null"],
                     enum: ["regular", "trigger"],
                     description:
-                      "The formula type. " + "Required if formula is not null.",
+                      "The formula type. " +
+                      "Regular formulas always recalculate whenever the document is loaded or modified. " +
+                      "Trigger formulas only recalculate according to formula_recalc_behavior. " +
+                      "Required if formula is not null.",
                   },
                   untie_col_id_from_label: {
                     type: "boolean",
@@ -712,6 +926,72 @@ ${
                       "Colors must be in six-value hexadecimal syntax. " +
                       'Example: `{"Choice 1": {"textColor": "#FFFFFF", "fillColor": "#16B378", ' +
                       '"fontUnderline": false, "fontItalic": false, "fontStrikethrough": false}}`',
+                  },
+                  cell_text_color: {
+                    type: "string",
+                    description:
+                      "The cell text color. " +
+                      "Must be a six-value hexadecimal string. " +
+                      'Example: `"#FFFFFF"`',
+                  },
+                  cell_fill_color: {
+                    type: "string",
+                    description:
+                      "The cell fill color. " +
+                      "Must be a six-value hexadecimal string. " +
+                      'Example: `"#16B378"`',
+                  },
+                  cell_bold: {
+                    type: "boolean",
+                    description: "If cell text should be bolded.",
+                  },
+                  cell_underline: {
+                    type: "boolean",
+                    description: "If cell text should be underlined.",
+                  },
+                  cell_italic: {
+                    type: "boolean",
+                    description: "If cell text should be italicized.",
+                  },
+                  cell_strikethrough: {
+                    type: "boolean",
+                    description:
+                      "If cell text should have a horizontal line through the center.",
+                  },
+                  header_text_color: {
+                    type: "string",
+                    description:
+                      "The column header text color. " +
+                      "Must be a six-value hexadecimal string. " +
+                      'Example: `"#FFFFFF"`',
+                  },
+                  header_fill_color: {
+                    type: "string",
+                    description:
+                      "The column header fill color. " +
+                      "Must be a six-value hexadecimal string. " +
+                      'Example: `"#16B378"`',
+                  },
+                  header_bold: {
+                    type: "boolean",
+                    description: "If the header text should be bolded.",
+                  },
+                  header_underline: {
+                    type: "boolean",
+                    description: "If the header text should be underlined.",
+                  },
+                  header_italic: {
+                    type: "boolean",
+                    description: "If the header text should be italicized.",
+                  },
+                  header_strikethrough: {
+                    type: "boolean",
+                    description:
+                      "If the header text should have a horizontal line through the center.",
+                  },
+                  conditional_formatting_rules: {
+                    description:
+                      "Not yet supported. Must be configured manually in the creator panel.",
                   },
                 },
                 additionalProperties: false,
@@ -767,11 +1047,134 @@ ${
                     ],
                     description: "The column type.",
                   },
+                  text_format: {
+                    type: "string",
+                    enum: ["text", "markdown", "hyperlink"],
+                    description:
+                      "The format of Text columns. " +
+                      "If unset, defaults to text.",
+                  },
+                  number_show_spinner: {
+                    type: "boolean",
+                    description:
+                      "Whether to show increment/decrement buttons. " +
+                      "If unset, defaults to false.",
+                  },
+                  number_format: {
+                    type: "string",
+                    enum: [
+                      "text",
+                      "currency",
+                      "decimal",
+                      "percent",
+                      "scientific",
+                    ],
+                    description:
+                      "The format of Int and Numeric columns. " +
+                      "If unset, defaults to text.",
+                  },
+                  number_currency_code: {
+                    type: "string",
+                    description:
+                      "ISO 4217 currency code (e.g. 'USD', 'GBP', 'JPY'). " +
+                      "Uses the document's currency if null or unset. " +
+                      "Only applies if number_format is currency.",
+                  },
+                  number_minus_sign: {
+                    type: "string",
+                    enum: ["minus", "parens"],
+                    description:
+                      "How to format negative numbers. " +
+                      "If unset, defaults to minus.",
+                  },
+                  number_min_decimals: {
+                    type: "number",
+                    description:
+                      "Minimum number of decimals for Int and Numeric columns.",
+                    minimum: 0,
+                    maximum: 20,
+                  },
+                  number_max_decimals: {
+                    type: "number",
+                    description:
+                      "Maximum number of decimals for Int and Numeric columns.",
+                    minimum: 0,
+                    maximum: 20,
+                  },
+                  toggle_format: {
+                    type: "string",
+                    enum: ["text", "checkbox", "switch"],
+                    description:
+                      "The format of Bool/Toggle columns. " +
+                      "If unset, defaults to checkbox.",
+                  },
                   reference_table_id: {
                     type: "string",
                     description:
                       "The ID of the referenced table. " +
                       "Required if type is Ref or RefList.",
+                  },
+                  reference_show_column_id: {
+                    type: "string",
+                    description:
+                      "The ID of the column from the referenced table to show. " +
+                      "Required if type is Ref or RefList.",
+                  },
+                  date_format: {
+                    type: "string",
+                    enum: [
+                      "YYYY-MM-DD",
+                      "MM-DD-YYYY",
+                      "MM/DD/YYYY",
+                      "MM-DD-YY",
+                      "MM/DD/YY",
+                      "DD MMM YYYY",
+                      "MMMM Do, YYYY",
+                      "DD-MM-YYYY",
+                      "custom",
+                    ],
+                    description:
+                      "The date format of Date and DateTime columns. " +
+                      "If custom, date_custom_format must be set.",
+                  },
+                  date_custom_format: {
+                    type: "string",
+                    description:
+                      "A Moment.js date format string (e.g. 'ddd, hA'). " +
+                      "Only applied if date_format is custom.",
+                  },
+                  time_format: {
+                    type: "string",
+                    enum: [
+                      "h:mma",
+                      "h:mma z",
+                      "HH:mm",
+                      "HH:mm z",
+                      "HH:mm:ss",
+                      "HH:mm:ss z",
+                      "custom",
+                    ],
+                    description:
+                      "The time format of DateTime columns. " +
+                      "If custom, time_custom_format must be set.",
+                  },
+                  time_custom_format: {
+                    type: "string",
+                    description:
+                      "A Moment.js time format string (e.g. 'h:mm a'). " +
+                      "Only applied if time_format is custom.",
+                  },
+                  timezone: {
+                    type: "string",
+                    description:
+                      "The IANA TZ identifier (e.g. 'America/New_York') for DateTime columns. " +
+                      "If unset, the document's timezone will be used.",
+                  },
+                  attachment_height: {
+                    type: "number",
+                    description: "Height of attachment thumbnails in pixels. ",
+                    minimum: 16,
+                    maximum: 96,
                   },
                   label: {
                     type: "string",
@@ -787,7 +1190,34 @@ ${
                     type: ["string", "null"],
                     enum: ["regular", "trigger"],
                     description:
-                      "The formula type. " + "Required if formula is not null.",
+                      "The formula type. " +
+                      "Regular formulas always recalculate whenever the document is loaded or data is changed. " +
+                      "Trigger formulas only recalculate according to formula_recalc_behavior. " +
+                      "Required if formula is not null.",
+                  },
+                  formula_recalc_behavior: {
+                    type: "string",
+                    enum: [
+                      "add-record",
+                      "add-or-update-record",
+                      "custom",
+                      "never",
+                    ],
+                    description:
+                      "When to recalculate the trigger formula. " +
+                      "add-record only calculates the formula when a record is first added. " +
+                      "add-or-update-record also recalculates the formula whenever a record updated. " +
+                      "custom only recalculates the formula whenever a record is added or " +
+                      "a column in formula_recalc_col_ids is updated.",
+                  },
+                  formula_recalc_col_ids: {
+                    type: "array",
+                    description:
+                      "If any of these columns change, the formula will be recalculated. " +
+                      "Required if formula_recalc_behavior is custom.",
+                    items: {
+                      type: "string",
+                    },
                   },
                   untie_col_id_from_label: {
                     type: "boolean",
@@ -827,6 +1257,72 @@ ${
                       "Colors must be in six-value hexadecimal syntax. " +
                       'Example: `{"Choice 1": {"textColor": "#FFFFFF", "fillColor": "#16B378", ' +
                       '"fontUnderline": false, "fontItalic": false, "fontStrikethrough": false}}`',
+                  },
+                  cell_text_color: {
+                    type: "string",
+                    description:
+                      "The cell text color. " +
+                      "Must be a six-value hexadecimal string. " +
+                      'Example: `"#FFFFFF"`',
+                  },
+                  cell_fill_color: {
+                    type: "string",
+                    description:
+                      "The cell fill color. " +
+                      "Must be a six-value hexadecimal string. " +
+                      'Example: `"#16B378"`',
+                  },
+                  cell_bold: {
+                    type: "boolean",
+                    description: "If cell text should be bolded.",
+                  },
+                  cell_underline: {
+                    type: "boolean",
+                    description: "If cell text should be underlined.",
+                  },
+                  cell_italic: {
+                    type: "boolean",
+                    description: "If cell text should be italicized.",
+                  },
+                  cell_strikethrough: {
+                    type: "boolean",
+                    description:
+                      "If cell text should have a horizontal line through the center.",
+                  },
+                  header_text_color: {
+                    type: "string",
+                    description:
+                      "The column header text color. " +
+                      "Must be a six-value hexadecimal string. " +
+                      'Example: `"#FFFFFF"`',
+                  },
+                  header_fill_color: {
+                    type: "string",
+                    description:
+                      "The column header fill color. " +
+                      "Must be a six-value hexadecimal string. " +
+                      'Example: `"#16B378"`',
+                  },
+                  header_bold: {
+                    type: "boolean",
+                    description: "If the header text should be bolded.",
+                  },
+                  header_underline: {
+                    type: "boolean",
+                    description: "If the header text should be underlined.",
+                  },
+                  header_italic: {
+                    type: "boolean",
+                    description: "If the header text should be italicized.",
+                  },
+                  header_strikethrough: {
+                    type: "boolean",
+                    description:
+                      "If the header text should have a horizontal line through the center.",
+                  },
+                  conditional_formatting_rules: {
+                    description:
+                      "Not yet supported. Must be configured manually in the creator panel.",
                   },
                 },
                 additionalProperties: false,
@@ -1058,12 +1554,7 @@ ${
         case "add_table": {
           const tableId = stringParam(parameterArgs.table_id, "table_id");
           const { columns } = parameterArgs;
-          result = await this._addTable(
-            docSession,
-            doc,
-            tableId,
-            columns ?? []
-          );
+          result = await this._addTable(docSession, doc, tableId, columns);
           break;
         }
         case "rename_table": {
@@ -1093,21 +1584,21 @@ ${
         case "add_column": {
           const tableId = stringParam(parameterArgs.table_id, "table_id");
           const columnId = stringParam(parameterArgs.column_id, "column_id");
-          const { column_options: columnOptions } = parameterArgs;
+          const { column_options: options } = parameterArgs;
           result = await this._addColumn(
             docSession,
             doc,
             tableId,
             columnId,
-            columnOptions
+            options
           );
           break;
         }
         case "update_column": {
           const tableId = stringParam(parameterArgs.table_id, "table_id");
           const columnId = stringParam(parameterArgs.column_id, "column_id");
-          const { column_options: columnOptions } = parameterArgs;
-          if (columnOptions === null) {
+          const { column_options: options } = parameterArgs;
+          if (options === null) {
             throw new Error("column_options parameter is required");
           }
 
@@ -1116,7 +1607,7 @@ ${
             doc,
             tableId,
             columnId,
-            columnOptions
+            options
           );
           break;
         }
@@ -1193,7 +1684,7 @@ ${
     }
   }
 
-  private _getTables(doc: AssistanceDoc) {
+  private _getTables(doc: AssistanceDoc): string[] {
     const docData = doc.docData;
     if (!docData) {
       throw new Error("Document not ready");
@@ -1201,9 +1692,9 @@ ${
 
     const tables = docData
       .getMetaTable("_grist_Tables")
-      .getRecords()
-      .filter((r) => r.tableId && !r.tableId.startsWith("GristHidden_"));
-    return tables ?? [];
+      .getColValues("tableId")
+      .filter((tableId) => tableId && !tableId.startsWith("GristHidden_"));
+    return tables;
   }
 
   private async _addTable(
@@ -1212,10 +1703,19 @@ ${
     tableId: string,
     columns: any[]
   ) {
+    const actions: UserAction[] = [];
+    if (!columns || columns.length === 0) {
+      // AddEmptyTable includes default columns ('A', 'B', 'C'), unlike
+      // AddTable, which creates a table with no columns that appears broken
+      // in the UI.
+      actions.push(["AddEmptyTable", tableId]);
+    } else {
+      actions.push(["AddTable", tableId, columns]);
+    }
     return await handleSandboxError(
       tableId,
       [],
-      doc.applyUserActions(docSession, [["AddTable", tableId, columns]], {
+      doc.applyUserActions(docSession, actions, {
         desc: "Called by OpenAIAssistantV2 (tool: add_table)",
       })
     );
@@ -1255,9 +1755,9 @@ ${
     doc: AssistanceDoc,
     tableId: string,
     columnId: string,
-    columnOptions: any
+    options: AddColumnOptions
   ) {
-    const colInfo = toColInfo(doc, tableId, columnOptions ?? {});
+    const colInfo = options ? buildColInfo(doc, null, options) : {};
     return await handleSandboxError(
       tableId,
       [columnId],
@@ -1276,36 +1776,43 @@ ${
     doc: AssistanceDoc,
     tableId: string,
     columnId: string,
-    columnOptions: any
+    options: UpdateColumnOptions
   ) {
-    const colInfo = toColInfo(doc, tableId, columnOptions);
-    if (colInfo.widgetOptions !== undefined) {
-      const columns = await doc.getTableCols(docSession, tableId);
-      const column = columns.find((c) => c.id === columnId);
-      if (!column) {
-        throw new Error(`Column ${columnId} not found`);
-      }
+    const columns = await doc.getTableCols(docSession, tableId);
+    const column = columns.find((c) => c.id === columnId);
+    if (!column) {
+      throw new Error(`Column ${columnId} not found`);
+    }
 
-      const originalWidgetOptions = safeJsonParse(
-        column.fields["widgetOptions"] as any,
-        {}
-      );
-      const newWidgetOptions = safeJsonParse(colInfo.widgetOptions, {});
-      colInfo.widgetOptions = JSON.stringify({
-        ...originalWidgetOptions,
-        ...newWidgetOptions,
-      });
+    const colInfo = buildColInfo(doc, column, options);
+    const actions: UserAction[] = [
+      ["ModifyColumn", tableId, columnId, colInfo],
+    ];
+    if (colInfo.visibleCol) {
+      // TODO: also set visibleCol in create_column.
+      //
+      // SetDisplayFormula requires:
+      //  1. The row ID of the added column
+      //  2. The final table ID of the added column
+      //
+      // Ideally, the action should be applied in the same bundle as
+      // AddVisibleColumn, to maintain atomicity. This may require
+      // modifications to AddVisibleColumn, since the final table ID
+      // isn't known ahead of time.
+      actions.push([
+        "SetDisplayFormula",
+        tableId,
+        null,
+        column.fields["colRef"],
+        `$${column.id}.${options.reference_show_column_id}`,
+      ]);
     }
     return await handleSandboxError(
       tableId,
       [columnId],
-      doc.applyUserActions(
-        docSession,
-        [["ModifyColumn", tableId, columnId, colInfo]],
-        {
-          desc: "Called by OpenAIAssistantV2 (tool: update_column)",
-        }
-      )
+      doc.applyUserActions(docSession, actions, {
+        desc: "Called by OpenAIAssistantV2 (tool: update_column)",
+      })
     );
   }
 
@@ -1449,6 +1956,9 @@ export class EchoAssistantV2 implements AssistantV2 {
     if (request.text === "ERROR") {
       throw new Error("ERROR");
     }
+    if (request.text === "SLOW") {
+      await new Promise(r => setTimeout(r, 1000));
+    }
 
     const messages = request.state?.messages || [];
     if (messages.length === 0) {
@@ -1519,62 +2029,305 @@ async function getVisibleTableIds(
   ];
 }
 
-function toColInfo(
+function buildColInfo(
   doc: AssistanceDoc,
-  tableId: string,
-  columnOptions: any
-): Partial<any> {
-  const colInfo: any = pick(
-    columnOptions,
+  column: RecordWithStringId | null,
+  options: AddColumnOptions | UpdateColumnOptions
+): Partial<ColInfo> {
+  const colInfo: Partial<ColInfo> = pick(
+    options,
     "type",
     "label",
     "formula",
     "description"
   );
-  if (columnOptions.id) {
-    colInfo.colId = columnOptions.id;
+
+  if (options.id) {
+    colInfo.colId = options.id;
   }
+
   if (colInfo.type === "DateTime") {
-    colInfo.type += `:${doc.docData?.docInfo().timezone ?? "UTC"}`;
-  } else if (colInfo.type?.startsWith("Ref")) {
-    colInfo.type += `:${columnOptions.reference_table_id ?? tableId}`;
+    const defaultTimezone = doc.docData?.docInfo().timezone ?? "UTC";
+    colInfo.type += `:${options.timezone ?? defaultTimezone}`;
   }
-  if (columnOptions.formula_type !== undefined) {
-    colInfo.isFormula = columnOptions.formula_type === "regular";
+
+  const originalType = column?.fields["type"] as string | undefined;
+  const originalRefTableId =
+    originalType && originalType.startsWith("Ref")
+      ? getReferencedTableId(originalType)
+      : null;
+  const refTableId = options.reference_table_id ?? originalRefTableId;
+  if (colInfo.type?.startsWith("Ref")) {
+    if (!refTableId) {
+      throw new Error("reference_table_id parameter is required");
+    }
+
+    colInfo.type += `:${refTableId}`;
+  } else if (
+    colInfo.type === undefined &&
+    originalRefTableId &&
+    options.reference_table_id
+  ) {
+    colInfo.type = `${originalRefTableId}:${options.reference_table_id}`;
+  }
+  if (
+    "reference_show_column_id" in options &&
+    options.reference_show_column_id !== undefined
+  ) {
+    if (!refTableId) {
+      throw new Error(
+        "reference_show_column_id parameter is only valid for Ref or RefList columns"
+      );
+    }
+
+    colInfo.visibleCol = colIdsToRefs(
+      doc,
+      refTableId,
+      options.reference_show_column_id
+    )?.[0];
+  }
+
+  if (options.formula_type !== undefined) {
+    colInfo.isFormula = options.formula_type === "regular";
   }
   if (colInfo.formula !== undefined && !colInfo.formula) {
     colInfo.isFormula = false;
   }
-  if (columnOptions.untie_col_id_from_label !== undefined) {
-    colInfo.untieColIdFromLabel = columnOptions.untie_col_id_from_label;
+  if (
+    "formula_recalc_col_ids" in options &&
+    options.formula_recalc_col_ids !== undefined &&
+    column
+  ) {
+    colInfo.recalcDeps = colIdsToRefs(
+      doc,
+      column.fields["parentId"] as number,
+      ...(options.formula_recalc_col_ids ?? [])
+    );
   }
-  if (columnOptions.text_alignment !== undefined) {
-    colInfo.widgetOptions = {
-      ...colInfo.widgetOptions,
-      alignment: columnOptions.text_alignment,
-    };
+  if ("formula_recalc_behavior" in options) {
+    switch (options.formula_recalc_behavior) {
+      case "add-record": {
+        colInfo.recalcWhen = RecalcWhen.DEFAULT;
+        colInfo.recalcDeps = null;
+        break;
+      }
+      case "add-or-update-record": {
+        colInfo.recalcWhen = RecalcWhen.MANUAL_UPDATES;
+        colInfo.recalcDeps = null;
+        break;
+      }
+      case "custom": {
+        colInfo.recalcWhen = RecalcWhen.DEFAULT;
+        break;
+      }
+      case "never": {
+        colInfo.recalcWhen = RecalcWhen.NEVER;
+        colInfo.recalcDeps = null;
+        break;
+      }
+      default: {
+        throw new Error(
+          `Invalid formula_recalc_behavior: ${options.formula_recalc_behavior}`
+        );
+      }
+    }
   }
-  if (columnOptions.text_wrap !== undefined) {
-    colInfo.widgetOptions = {
-      ...colInfo.widgetOptions,
-      wrap: columnOptions.text_wrap,
-    };
+
+  if (options.untie_col_id_from_label !== undefined) {
+    colInfo.untieColIdFromLabel = options.untie_col_id_from_label;
   }
-  if (columnOptions.choices !== undefined) {
-    colInfo.widgetOptions = {
-      ...colInfo.widgetOptions,
-      choices: columnOptions.choices,
-    };
+
+  const originalWidgetOptions = safeJsonParse(
+    column?.fields["widgetOptions"] as any,
+    {}
+  );
+  const widgetOptions: any = {};
+
+  if (options.text_format !== undefined) {
+    switch (options.text_format) {
+      case "text": {
+        widgetOptions.widget = "TextBox";
+        break;
+      }
+      case "markdown": {
+        widgetOptions.widget = "Markdown";
+        break;
+      }
+      case "hyperlink": {
+        widgetOptions.widget = "HyperLink";
+        break;
+      }
+      default: {
+        throw new Error(`Invalid text_format: ${options.text_format}`);
+      }
+    }
   }
-  if (columnOptions.choice_styles !== undefined) {
-    colInfo.widgetOptions = {
-      ...colInfo.widgetOptions,
-      choiceOptions: columnOptions.choice_styles,
-    };
+
+  if (options.number_show_spinner !== undefined) {
+    if (options.number_show_spinner) {
+      widgetOptions.widget = "Spinner";
+    } else {
+      widgetOptions.widget = "TextBox";
+    }
   }
-  if (colInfo.widgetOptions !== undefined) {
-    colInfo.widgetOptions = JSON.stringify(colInfo.widgetOptions);
+  if (options.number_format !== undefined) {
+    switch (options.number_format) {
+      case "currency":
+      case "decimal":
+      case "percent":
+      case "scientific": {
+        widgetOptions.numMode = options.number_format;
+        break;
+      }
+      case "text": {
+        widgetOptions.numMode = null;
+        break;
+      }
+      default: {
+        throw new Error(`Invalid number_format: ${options.number_format}`);
+      }
+    }
   }
+  if (options.number_currency_code !== undefined) {
+    widgetOptions.currency = options.number_currency_code;
+  }
+  if (options.number_minus_sign !== undefined) {
+    switch (options.number_minus_sign) {
+      case "minus": {
+        widgetOptions.numSign = null;
+        break;
+      }
+      case "parens": {
+        widgetOptions.numSign = "parens";
+        break;
+      }
+      default: {
+        throw new Error(
+          `Invalid number_minus_sign: ${options.number_minus_sign}`
+        );
+      }
+    }
+  }
+  if (options.number_min_decimals !== undefined) {
+    widgetOptions.decimals = options.number_min_decimals;
+  }
+  if (options.number_max_decimals !== undefined) {
+    widgetOptions.maxDecimals = options.number_max_decimals;
+  }
+
+  if (options.toggle_format !== undefined) {
+    switch (options.toggle_format) {
+      case "text": {
+        widgetOptions.widget = "TextBox";
+        break;
+      }
+      case "checkbox": {
+        widgetOptions.widget = "CheckBox";
+        break;
+      }
+      case "switch": {
+        widgetOptions.widget = "Switch";
+        break;
+      }
+      default: {
+        throw new Error(`Invalid toggle_format: ${options.toggle_format}`);
+      }
+    }
+  }
+
+  if (options.date_format !== undefined) {
+    if (options.date_format === "custom") {
+      if (!options.date_custom_format) {
+        throw new Error(
+          "date_custom_format is required when date_format is custom"
+        );
+      }
+
+      widgetOptions.dateFormat = options.date_custom_format;
+      widgetOptions.isCustomDateFormat = true;
+    } else {
+      widgetOptions.dateFormat = options.date_format;
+      widgetOptions.isCustomDateFormat = false;
+    }
+  }
+  if (options.time_format !== undefined) {
+    if (options.time_format === "custom") {
+      if (!options.time_custom_format) {
+        throw new Error(
+          "time_custom_format is required when time_format is custom"
+        );
+      }
+
+      widgetOptions.timeFormat = options.time_custom_format;
+      widgetOptions.isCustomTimeFormat = true;
+    } else {
+      widgetOptions.timeFormat = options.time_format;
+      widgetOptions.isCustomTimeFormat = false;
+    }
+  }
+
+  if (options.attachment_height !== undefined) {
+    widgetOptions.height = options.attachment_height;
+  }
+
+  if (options.text_alignment !== undefined) {
+    widgetOptions.alignment = options.text_alignment;
+  }
+  if (options.text_wrap !== undefined) {
+    widgetOptions.wrap = options.text_wrap;
+  }
+
+  if (options.choices !== undefined) {
+    widgetOptions.choices = options.choices;
+  }
+  if (options.choice_styles !== undefined) {
+    widgetOptions.choiceOptions = options.choice_styles;
+  }
+
+  if (options.cell_text_color !== undefined) {
+    widgetOptions.textColor = options.cell_text_color;
+  }
+  if (options.cell_fill_color !== undefined) {
+    widgetOptions.fillColor = options.cell_fill_color;
+  }
+  if (options.cell_bold !== undefined) {
+    widgetOptions.fontBold = options.cell_bold;
+  }
+  if (options.cell_underline !== undefined) {
+    widgetOptions.fontUnderline = options.cell_underline;
+  }
+  if (options.cell_italic !== undefined) {
+    widgetOptions.fontItalic = options.cell_italic;
+  }
+  if (options.cell_strikethrough !== undefined) {
+    widgetOptions.fontStrikethrough = options.cell_strikethrough;
+  }
+  if (options.header_text_color !== undefined) {
+    widgetOptions.headerTextColor = options.header_text_color;
+  }
+  if (options.header_fill_color !== undefined) {
+    widgetOptions.headerFillColor = options.header_fill_color;
+  }
+  if (options.header_bold !== undefined) {
+    widgetOptions.headerFontBold = options.header_bold;
+  }
+  if (options.header_underline !== undefined) {
+    widgetOptions.headerFontUnderline = options.header_underline;
+  }
+  if (options.header_italic !== undefined) {
+    widgetOptions.headerFontItalic = options.header_italic;
+  }
+  if (options.header_strikethrough !== undefined) {
+    widgetOptions.headerFontStrikethrough = options.header_strikethrough;
+  }
+
+  if (!isEmpty(widgetOptions)) {
+    colInfo.widgetOptions = JSON.stringify({
+      ...originalWidgetOptions,
+      ...widgetOptions,
+    });
+  }
+
   return colInfo;
 }
 
@@ -1605,4 +2358,35 @@ function getErrorPlatform(tableId: string): TableOperationsPlatform {
       throw new Error("no document");
     },
   };
+}
+
+function colIdsToRefs(
+  doc: AssistanceDoc,
+  tableIdOrRef: string | number,
+  ...colIds: string[]
+) {
+  const docData = doc.docData;
+  if (!docData) {
+    throw new Error("Document not ready");
+  }
+
+  let tableRef: number;
+  if (typeof tableIdOrRef === "string") {
+    tableRef = docData
+      .getMetaTable("_grist_Tables")
+      .findRow("tableId", tableIdOrRef);
+    if (tableRef === 0) {
+      throw new Error(`Table ${tableIdOrRef} not found`);
+    }
+  } else {
+    tableRef = tableIdOrRef;
+  }
+
+  const colIdsSet = new Set(colIds);
+  const colRefs = docData
+    .getMetaTable("_grist_Tables_column")
+    .filterRecords({ parentId: tableRef })
+    .filter((r) => colIdsSet.has(r.colId))
+    .map((r) => r.id);
+  return colRefs;
 }

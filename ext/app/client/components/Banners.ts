@@ -18,6 +18,7 @@
 import {buildActivationBanner} from 'app/client/components/ActivationBanner';
 import * as CoreBanners from 'app/client/components/CoreBanners';
 import {DocUsageBanner} from 'app/client/components/DocUsageBanner';
+import {ExternalAttachmentBanner} from 'app/client/components/ExternalAttachmentBanner';
 import {SiteUsageBanner} from 'app/client/components/SiteUsageBanner';
 import {AppModel} from 'app/client/models/AppModel';
 import {DocPageModel} from 'app/client/models/DocPageModel';
@@ -35,7 +36,8 @@ const EEBanners = {
   buildDocumentBanners(docPageModel: DocPageModel) {
     return buildActivationBanner(docPageModel.appModel) || [
       dom.create(DocUsageBanner, docPageModel),
-      dom.create(VersionUpdateBanner, docPageModel.appModel)
+      dom.create(VersionUpdateBanner, docPageModel.appModel),
+      dom.create(ExternalAttachmentBanner, docPageModel),
     ];
   }
 };

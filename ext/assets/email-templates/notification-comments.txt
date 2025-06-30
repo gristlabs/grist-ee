@@ -1,7 +1,7 @@
 # FROM: {{#equals (length authorNames) 1}}{{authorNames.[0]}} (via Grist){{else}}Grist{{/equals}}
-# SUBJECT: New comments in {{docTitle}}
+# SUBJECT: New comments in {{docName}}
 
-[{{docTitle}}]({{docUrl}})
+New comments in [{{docName}}]({{docUrl}})
 
 {{#greaterThan (length comments) 1}}
   {{length comments}} new comments from
@@ -14,7 +14,7 @@
           {{~#equals (length authorNames) 3~}}
             {{authorNames.[0]}}, {{authorNames.[1]}}, and {{authorNames.[2]}}
           {{~else~}}
-            {{authorNames.[0]}}, {{authorNames.[1]}}, and {{this.numauthorNames}} others
+            {{authorNames.[0]}}, {{authorNames.[1]}}, and {{numAuthorsMinus2}} others
           {{~/equals~}}
         {{~/equals~}}
       {{~/equals~}}.
@@ -27,18 +27,19 @@
       {{this.author.name}} commented
     {{~/if~}}.
 
-    {{this.body}}
+    {{this.text}}
+    
     [Open comment]({{this.anchorLink}})
-
 {{/each}}
+
 [Open document]({{docUrl}})
 
 {{#if unsubscribeUrl }}
   {{#if hasMentions}}
-  You received this email because you are a participant, or were mentioned in a discussion in {{docTitle}}.
+  You received this email because you are a participant, or were mentioned in a discussion in {{docName}}.
   [Unsubscribe from this document.]({{unsubscribeFullyUrl}})
   {{else}}
-  You received this email because you subscribed to notifications of comments in {{docTitle}}.
+  You received this email because you subscribed to notifications of comments in {{docName}}.
   [Unsubscribe from this document.]({{unsubscribeUrl}})
   {{/if}}
 {{/if}}

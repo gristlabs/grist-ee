@@ -87,12 +87,9 @@ export function createDocNotificationManager(gristServer: GristServer): IDocNoti
     return;
   }
 
-  // Create a queue, and set up the default handler for it, which is what creates the actual
-  // worker to handle all types of jobs in this queue. For unhandled jobs, just log a warning.
+  // Create a queue. Only home servers will set up the default handler for it (which is what
+  // creates a worker to handle jobs in the queue). Others will only add jobs to it.
   const queue = jobs.queue(docEmailsQueue);
-  queue.handleDefault(async (job: GristJob) => {
-    log.warn("DocNotificationHandler: UNHANDLED JOB", job);
-  });
   const batchedJobs = new BatchedJobs(jobs, queue, 'email', Deps.schedulesByType);
   return new DocNotificationManager(gristServer, batchedJobs);
 }
@@ -280,7 +277,11 @@ class DocNotificationHandler {
     this._homeDb = _gristServer.getHomeDBManager();
     this._notifier = _gristServer.getNotifier();
 
-    // Set up job handling.
+    // Set up job handling. The default handler is what creates the actual worker to handle all
+    // types of jobs in this queue. For unhandled jobs, just log a warning.
+    batchedJobs.queue.handleDefault(async (job: GristJob) => {
+      log.warn("DocNotificationHandler: UNHANDLED JOB", job);
+    });
     batchedJobs.setHandler(this._deliverDocEmail.bind(this));
   }
 

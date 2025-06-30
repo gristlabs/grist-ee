@@ -21,11 +21,11 @@
 
 import {GristBullMQJobs, GristBullMQQueueScope, GristJob} from 'app/server/lib/GristJobs';
 import * as log from 'app/server/lib/log';
-import {popFromMap} from 'app/common/gutil';
+import {Job as BullMQJob} from 'bullmq';
 import {Redis} from 'ioredis';
 
 export interface Schedule {
-  type: string;
+  type: string;         // Used in redis key, should be unique across Schedule and BatchedJobs instances.
   firstDelay: number;   // First batch is processed this long after first job.
   throttle: number;     // Subsequent batches are processed at this interval, until an empty batch.
 }
@@ -46,7 +46,6 @@ export type Handler = (jobType: string, batchKey: string, batchedData: string[])
 
 export class BatchedJobs {
   private _redis: Redis;
-  private _toReschedule = new Map<String, () => Promise<void>>();
 
   constructor(
     jobs: GristBullMQJobs,
@@ -64,8 +63,10 @@ export class BatchedJobs {
     this.queue.handleName(this._name, this._handleJob.bind(this, handler));
     const worker = this.queue.getWorker();
     if (!worker) { throw new Error('BatchedJobs.setHandler: queue.handleDefault must be called first'); }
-    worker.on('completed', (job) => popFromMap(this._toReschedule, job.id)?.());
-    worker.on('failed', async (job, err) => { log.error(`BatchedJobs job ${job?.id} failed`, err); });
+
+    worker.on('completed', (job) => this._maybeReschedule(job));
+    // We don't reschedule on failure: we'll add a job on next add() call, with 'firstDelay' for delay.
+    worker.on('failed', (job, err) => { log.error(`BatchedJobs job ${job?.id} failed`, err); });
     worker.on('error', (err) => { log.error("BatchdJobs error", err); });
   }
 
@@ -77,28 +78,39 @@ export class BatchedJobs {
     if (!schedule) { throw new Error(`Unknown job type ${jobType}`); }
     const jobId = getJobId(schedule, batchKey);
     log.debug('BatchedJobs adding job', jobId);
-    const newCount = await this._redis.rpush(getPayloadKey(jobId), data);
-    if (newCount === 1) {
-      // When newCount > 1, we know this jobId is already scheduled, so this call will be a no-op.
+
+    // We are just doing rpush(key, data) here, plus batching with a check for whether a job
+    // already exists. This is a minor optimization that allows us to make a single Redis
+    // roundtrip in most cases, and only make a second trip for adding the job when needed.
+    const key = getPayloadKey(jobId);
+
+    let exists: number | undefined;
+    await this._redis.pipeline()
+      .rpush(key, data)
+      .exists(this.queue.getJobRedisKey(jobId), (err, _exists) => { exists = _exists; })
+      .exec();
+    if (!exists) {
       await this._addJob({jobId, jobType, batchKey}, schedule.firstDelay);
     }
   }
 
-  private async _handleJob(handler: Handler, job: GristJob): Promise<void> {
+  private async _handleJob(handler: Handler, job: BullMQJob): Promise<void> {
     const {jobId, jobType, batchKey} = job.data;
     log.debug('BatchedJobs handling job', jobId);
     const batchedData = await this._redis.lpop(getPayloadKey(jobId), batchUpperBound);
     if (batchedData?.length) {
       const schedule = this._types[jobType];
-      await handler(jobType, batchKey, batchedData);
 
-      // Reschedule this job using 'throttle' delay, which subsequent add()s will respect. We
-      // can't do it here (while the job is running), so we tell the 'completed' handler to finish
-      // this scheduling.
+      // We want this job rescheduled using 'throttle' delay, which subsequent add()s will
+      // respect (they won't override a job with an existing ID). We can't reschedule a job while
+      // it's running, but will do it on 'completed' and 'failed' handlers. We mark it for such
+      // rescheduling by adding a 'rescheduleDelay' field with the delay to use.
       //
       // Note a low-risk race condition: an add() between this handler finishing and the 'completed'
       // callback may add a job with 'firstDelay' (instead of the desired 'throttle' delay).
-      this._toReschedule.set(jobId, () => this._addJob({jobId, jobType, batchKey}, schedule.throttle));
+      await job.updateData({jobId, jobType, batchKey, rescheduleDelay: schedule.throttle});
+
+      await handler(jobType, batchKey, batchedData);
     }
   }
 
@@ -109,5 +121,17 @@ export class BatchedJobs {
       removeOnComplete: true,
       removeOnFail: true,
     });
+  }
+
+  /**
+   * After any job, if we delivered any notifications, we mark it for rescheduling. This is the
+   * mechanism by which notifications after the first one are throttled by a longer delay (namely,
+   * schedule.throttle).
+   */
+  private async _maybeReschedule(job: GristJob) {
+    const {jobId, jobType, batchKey, rescheduleDelay} = job.data;
+    if (rescheduleDelay) {
+      await this._addJob({jobId, jobType, batchKey}, rescheduleDelay);
+    }
   }
 }

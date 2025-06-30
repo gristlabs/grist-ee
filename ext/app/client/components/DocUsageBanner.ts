@@ -64,7 +64,7 @@ export class DocUsageBanner extends Disposable {
         const product = org.billingAccount?.product;
         return dom.create(Banner, {
           content: buildBannerMessage(
-            buildLimitStatusMessage({status: 'approachingLimit'}, product?.features),
+            buildLimitStatusMessage({dataLimitInfo: {status: 'approachingLimit'}}, product?.features),
             (product && isFreePlan(product.name)
               ? [' ', buildUpgradeMessage(
                 canUpgradeOrg(org),
@@ -90,7 +90,7 @@ export class DocUsageBanner extends Disposable {
         const product = org.billingAccount?.product;
         return dom.create(Banner, {
           content: buildBannerMessage(
-            buildLimitStatusMessage(dataLimitInfo, product?.features),
+            buildLimitStatusMessage({dataLimitInfo}, product?.features),
             (product && isFreePlan(product.name)
               ? [' ', buildUpgradeMessage(
                 canUpgrade,
@@ -108,7 +108,7 @@ export class DocUsageBanner extends Disposable {
                 'short',
                 () => this._docPageModel.appModel.showUpgradeModal()
               )
-              : buildLimitStatusMessage(dataLimitInfo, product?.features)
+                : buildLimitStatusMessage({dataLimitInfo}, product?.features)
             ),
             testId('text'),
           ),

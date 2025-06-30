@@ -1,7 +1,7 @@
 # FROM: Grist
-# SUBJECT: Updates to {{docTitle}}
+# SUBJECT: Updates to {{docName}}
 
-Document {{docTitle}} was changed.
+Updates to {{docName}}
 
 {{#each authors}}
   - {{this.user.name}} made changes
@@ -23,6 +23,6 @@ Document {{docTitle}} was changed.
 [Open document]({{docUrl}})
 
 {{#if unsubscribeUrl }}
-  You received this email because you subscribed to notifications of changes to {{docTitle}}.
+  You received this email because you subscribed to notifications of changes to {{docName}}.
   [Unsubscribe from this document.]({{unsubscribeUrl}})
 {{/if}}
