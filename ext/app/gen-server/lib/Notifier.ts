@@ -16,6 +16,7 @@ import {
   UserIdDelta
 } from 'app/gen-server/lib/homedb/HomeDBManager';
 import {
+  DocNotificationEvent,
   SendGridConfig,
   SendGridMail,
   SendGridMailWithTemplateId,
@@ -349,6 +350,16 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     const templateId = this._getTemplateId(event);
     if (!templateId) { return; }
     const mail = await this._tools.twoFactorStatusChanged(event, userId, method);
+    await this.applyTemplate(templateId, mail);
+  }
+
+  /**
+   * Handler for document notifications, including docChange and comment events.
+   */
+  public async docNotification(event: DocNotificationEvent, userId: number, templateData: object): Promise<void> {
+    const templateId = this._getTemplateId(event);
+    if (!templateId) { return; }
+    const mail = await this._tools.docNotification(event, userId, templateData);
     await this.applyTemplate(templateId, mail);
   }
 

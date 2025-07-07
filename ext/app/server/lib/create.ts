@@ -55,8 +55,8 @@ class EnterpriseCreate extends BaseCreate {
   public override AuditLogger(dbManager: HomeDBManager, gristServer: GristServer) {
     return configureEnterpriseAuditLogger(dbManager, gristServer);
   }
-  public override Assistant() {
-    return configureAssistant();
+  public override Assistant(gristServer: GristServer) {
+    return configureAssistant(gristServer);
   }
   public override getLoginSystem(): Promise<GristLoginSystem> {
     return getLoginSystem();

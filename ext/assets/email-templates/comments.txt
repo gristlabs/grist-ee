@@ -28,8 +28,8 @@ New comments in [{{docName}}]({{docUrl}})
     {{~/if~}}.
 
     {{this.text}}
-    
-    [Open comment]({{this.anchorLink}})
+
+    [Open comment]({{{../docUrl}}}#{{{this.anchorLink}}})
 {{/each}}
 
 [Open document]({{docUrl}})

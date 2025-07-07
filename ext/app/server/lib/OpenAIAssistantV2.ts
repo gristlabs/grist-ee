@@ -1,18 +1,22 @@
-import { ApplyUAResult } from "app/common/ActiveDocAPI";
+import { ApplyUAOptions, ApplyUAResult } from "app/common/ActiveDocAPI";
 import {
   AssistanceMessage,
   AssistanceRequestV2,
   AssistanceResponseV2,
 } from "app/common/Assistance";
 import { AssistantProvider } from "app/common/Assistant";
-import { delay } from "app/common/delay";
 import {
-  CellValue,
-  getColValues,
-  RowRecord,
-  UserAction,
-} from "app/common/DocActions";
-import { getReferencedTableId, RecalcWhen } from "app/common/gristTypes";
+  AccessLevel,
+  ICustomWidget,
+  matchWidget,
+} from "app/common/CustomWidget";
+import { delay } from "app/common/delay";
+import { ColValues, getColValues, UserAction } from "app/common/DocActions";
+import {
+  extractTypeFromColType,
+  getReferencedTableId,
+  RecalcWhen,
+} from "app/common/gristTypes";
 import { safeJsonParse } from "app/common/gutil";
 import { RecordWithStringId } from "app/plugin/DocApiTypes";
 import { arrayRepeat } from "app/plugin/gutil";
@@ -20,16 +24,6 @@ import {
   handleSandboxErrorOnPlatform,
   TableOperationsPlatform,
 } from "app/plugin/TableOperationsImpl";
-import { OptDocSession } from "app/server/lib/DocSession";
-import {
-  AssistanceDoc,
-  AssistantV2,
-  AssistantV2Options,
-  FunctionCallResult,
-  FunctionCallSuccess,
-  OpenAIChatCompletion,
-  OpenAITool,
-} from "app/server/lib/IAssistant";
 import {
   getProviderFromHostname,
   getUserHash,
@@ -40,10 +34,56 @@ import {
   TokensExceededFirstMessageError,
   TokensExceededLaterMessageError,
 } from "app/server/lib/Assistant";
+import { OptDocSession } from "app/server/lib/DocSession";
+import { GristServer } from "app/server/lib/GristServer";
+import {
+  AssistanceDoc,
+  AssistantV2,
+  AssistantV2Options,
+  FunctionCallResult,
+  OpenAIChatCompletion,
+  OpenAITool,
+} from "app/server/lib/IAssistant";
 import log from "app/server/lib/log";
-import { stringParam } from "app/server/lib/requestUtils";
+import { OPENAI_TOOLS } from "app/server/lib/OpenAITools";
+import {
+  AddPageWidgetParams,
+  AddPageWidgetParamsChecker,
+  AddRecordsParams,
+  AddRecordsParamsChecker,
+  AddTableColumnParams,
+  AddTableColumnParamsChecker,
+  AddTableParams,
+  AddTableParamsChecker,
+  GetPageWidgetsParams,
+  GetPageWidgetsParamsChecker,
+  GetTableColumnsParams,
+  GetTableColumnsParamsChecker,
+  QueryDocumentParams,
+  QueryDocumentParamsChecker,
+  RemovePageParams,
+  RemovePageParamsChecker,
+  RemovePageWidgetParams,
+  RemovePageWidgetParamsChecker,
+  RemoveRecordsParams,
+  RemoveRecordsParamsChecker,
+  RemoveTableColumnParams,
+  RemoveTableColumnParamsChecker,
+  RemoveTableParams,
+  RemoveTableParamsChecker,
+  RenameTableParams,
+  RenameTableParamsChecker,
+  UpdatePageParams,
+  UpdatePageParamsChecker,
+  UpdatePageWidgetParams,
+  UpdatePageWidgetParamsChecker,
+  UpdateRecordsParams,
+  UpdateRecordsParamsChecker,
+  UpdateTableColumnParams,
+  UpdateTableColumnParamsChecker,
+} from "app/server/lib/OpenAIToolTypes";
 import { runSQLQuery } from "app/server/lib/runSQLQuery";
-import { isEmpty, pick } from "lodash";
+import { isEmpty, omit, pick } from "lodash";
 import moment from "moment";
 import fetch from "node-fetch";
 
@@ -174,7 +214,10 @@ export class OpenAIAssistantV2 implements AssistantV2 {
   private _maxTokens = this._options.maxTokens;
   private _maxToolCalls = this._options.maxToolCalls ?? 10;
 
-  public constructor(private _options: AssistantV2Options) {
+  public constructor(
+    private _gristServer: GristServer,
+    private _options: AssistantV2Options
+  ) {
     if (!this._apiKey && !_options.completionEndpoint) {
       throw new Error(
         "Please set ASSISTANT_API_KEY or ASSISTANT_CHAT_COMPLETION_ENDPOINT"
@@ -244,7 +287,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
     doc: AssistanceDoc,
     request: AssistanceRequestV2
   ): Promise<OpenAIChatCompletion> {
-    const messages = await this._buildMessages(docSession, doc, request);
+    const messages = await this._buildMessages(doc, request);
     this._logSendCompletionTelemetry({
       docSession,
       doc,
@@ -281,12 +324,11 @@ export class OpenAIAssistantV2 implements AssistantV2 {
   }
 
   private async _buildMessages(
-    docSession: OptDocSession,
     doc: AssistanceDoc,
     request: AssistanceRequestV2
   ) {
     const messages = request.state?.messages || [];
-    messages[0] = await this._getDeveloperPrompt(docSession, doc, request);
+    messages[0] = await this._getDeveloperPrompt(doc, request);
     if (request.text) {
       messages.push({
         role: "user",
@@ -447,16 +489,13 @@ export class OpenAIAssistantV2 implements AssistantV2 {
    * The prompt is still a work in progress and will evolve over time.
    */
   private async _getDeveloperPrompt(
-    docSession: OptDocSession,
     doc: AssistanceDoc,
     request: AssistanceRequestV2
   ): Promise<AssistanceMessage> {
     const {
       context: { viewId },
     } = request;
-    const visibleTableIds = viewId
-      ? await getVisibleTableIds(docSession, doc, viewId)
-      : undefined;
+    const view = viewId ? await getView(doc, viewId) : undefined;
     const content = `<identity>
 You are an AI assistant for [Grist](https://www.getgrist.com), a collaborative spreadsheet-meets-database.
 </identity>
@@ -468,8 +507,8 @@ Do not call modification APIs (e.g. add_records, update_records) until the user 
 </instructions>
 
 <tool_instructions>
-Use get_tables and get_columns to discover valid IDs.
-When the user refers to a column label, match it to the ID using get_columns.
+Use get_tables and get_table_columns to discover valid IDs.
+When the user refers to a column label, match it to the ID using get_table_columns.
 If a table or column doesn't exist, check it hasn't been removed since you last queried the schema.
 If a call fails due to insufficient access, tell the user they need full access to the document.
 </tool_instructions>
@@ -483,7 +522,7 @@ Only SQLite-compatible SQL is supported.
 Always use column IDs, not labels.
 Never set the id field in records.
 For updates or deletions, first query the table for id values.
-Only records, columns, or tables can be modified.
+Only records, columns, pages, or tables can be modified.
 When setting choice_styles, only use values like:
 \`{"Choice 1": {"textColor": "#FFFFFF", "fillColor": "#16B378",
 "fontUnderline": false, "fontItalic": false, "fontStrikethrough": false}}\`
@@ -565,11 +604,7 @@ Confirm with user, then call remove_records with:
 
 <context>
 The current date is ${moment().format("MMMM D, YYYY")}.
-${
-  visibleTableIds && visibleTableIds.length > 0
-    ? `The user is currently viewing table(s): ${visibleTableIds.join(", ")}.`
-    : ""
-}
+${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
 </context>`;
     return {
       role: "system",
@@ -601,885 +636,7 @@ ${
   }
 
   private _getTools(): OpenAITool[] {
-    return [
-      {
-        type: "function",
-        function: {
-          name: "get_tables",
-          description: "Returns the IDs of all tables in a Grist document.",
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "add_table",
-          description: "Adds a table to a Grist document.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table to add.",
-              },
-              columns: {
-                type: ["array", "null"],
-                description:
-                  "The columns to create the table with. " +
-                  "Null if the table should be created with default columns ('A', 'B', 'C').",
-                items: {
-                  type: "object",
-                  properties: {
-                    id: {
-                      type: "string",
-                      description: "The column ID.",
-                    },
-                  },
-                  required: ["id"],
-                  additionalProperties: false,
-                },
-              },
-            },
-            required: ["table_id", "columns"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "rename_table",
-          description: "Renames a table in a Grist document.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table to rename.",
-              },
-              new_table_id: {
-                type: "string",
-                description: "The new ID of the table.",
-              },
-            },
-            required: ["table_id", "new_table_id"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "remove_table",
-          description: "Removes a table from a Grist document.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table to remove.",
-              },
-            },
-            required: ["table_id"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "get_columns",
-          description: "Returns all columns in a table.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table.",
-              },
-            },
-            required: ["table_id"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "add_column",
-          description: "Adds a column to a table.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table to add the column to.",
-              },
-              column_id: {
-                type: "string",
-                description: "The ID of the column to add.",
-              },
-              column_options: {
-                type: ["object", "null"],
-                description:
-                  "The options to create the column with. " +
-                  'Example: `{"type": "Text", "label": "Name"}`',
-                properties: {
-                  type: {
-                    type: "string",
-                    enum: [
-                      "Any",
-                      "Text",
-                      "Numeric",
-                      "Int",
-                      "Bool",
-                      "Date",
-                      "DateTime",
-                      "Choice",
-                      "ChoiceList",
-                      "Ref",
-                      "RefList",
-                      "Attachments",
-                    ],
-                    description: "The column type.",
-                  },
-                  text_format: {
-                    type: "string",
-                    enum: ["text", "markdown", "hyperlink"],
-                    description:
-                      "The format of Text columns. " +
-                      "If unset, defaults to text.",
-                  },
-                  number_show_spinner: {
-                    type: "boolean",
-                    description:
-                      "Whether to show increment/decrement buttons. " +
-                      "If unset, defaults to false.",
-                  },
-                  number_format: {
-                    type: "string",
-                    enum: [
-                      "text",
-                      "currency",
-                      "decimal",
-                      "percent",
-                      "scientific",
-                    ],
-                    description:
-                      "The format of Int and Numeric columns. " +
-                      "If unset, defaults to text.",
-                  },
-                  number_currency_code: {
-                    type: ["string", "null"],
-                    description:
-                      "ISO 4217 currency code (e.g. 'USD', 'GBP', 'JPY'). " +
-                      "Uses the document's currency if null or unset. " +
-                      "Only applies if number_format is currency.",
-                  },
-                  number_minus_sign: {
-                    type: "string",
-                    enum: ["minus", "parens"],
-                    description:
-                      "How to format negative numbers. " +
-                      "If unset, defaults to minus.",
-                  },
-                  number_min_decimals: {
-                    type: "number",
-                    description:
-                      "Minimum number of decimals for Int and Numeric columns.",
-                    minimum: 0,
-                    maximum: 20,
-                  },
-                  number_max_decimals: {
-                    type: "number",
-                    description:
-                      "Maximum number of decimals for Int and Numeric columns.",
-                    minimum: 0,
-                    maximum: 20,
-                  },
-                  toggle_format: {
-                    type: "string",
-                    enum: ["text", "checkbox", "switch"],
-                    description:
-                      "The format of Bool/Toggle columns. " +
-                      "If unset, defaults to checkbox.",
-                  },
-                  reference_table_id: {
-                    type: "string",
-                    description:
-                      "The ID of the referenced table. " +
-                      "Required if type is Ref or RefList.",
-                  },
-                  date_format: {
-                    type: "string",
-                    enum: [
-                      "YYYY-MM-DD",
-                      "MM-DD-YYYY",
-                      "MM/DD/YYYY",
-                      "MM-DD-YY",
-                      "MM/DD/YY",
-                      "DD MMM YYYY",
-                      "MMMM Do, YYYY",
-                      "DD-MM-YYYY",
-                      "custom",
-                    ],
-                    description:
-                      "The date format of Date and DateTime columns. " +
-                      "If custom, date_custom_format must be set.",
-                  },
-                  date_custom_format: {
-                    type: "string",
-                    description:
-                      "A Moment.js date format string (e.g. 'ddd, hA'). " +
-                      "Only applied if date_format is custom.",
-                  },
-                  time_format: {
-                    type: "string",
-                    enum: [
-                      "h:mma",
-                      "h:mma z",
-                      "HH:mm",
-                      "HH:mm z",
-                      "HH:mm:ss",
-                      "HH:mm:ss z",
-                      "custom",
-                    ],
-                    description:
-                      "The time format of DateTime columns. " +
-                      "If custom, time_custom_format must be set.",
-                  },
-                  time_custom_format: {
-                    type: "string",
-                    description:
-                      "A Moment.js time format string (e.g. 'h:mm a'). " +
-                      "Only applied if time_format is custom.",
-                  },
-                  timezone: {
-                    type: "string",
-                    description:
-                      "The IANA TZ identifier (e.g. 'America/New_York') for DateTime columns. " +
-                      "If unset, the document's timezone will be used.",
-                  },
-                  attachment_height: {
-                    type: "number",
-                    description: "Height of attachment thumbnails in pixels. ",
-                    minimum: 16,
-                    maximum: 96,
-                  },
-                  label: {
-                    type: "string",
-                    description: "The column label.",
-                  },
-                  formula: {
-                    type: ["string", "null"],
-                    description:
-                      "The column formula. " +
-                      "Must be Grist-compatible Python syntax (e.g. `$Amount * 1.1`).",
-                  },
-                  formula_type: {
-                    type: ["string", "null"],
-                    enum: ["regular", "trigger"],
-                    description:
-                      "The formula type. " +
-                      "Regular formulas always recalculate whenever the document is loaded or modified. " +
-                      "Trigger formulas only recalculate according to formula_recalc_behavior. " +
-                      "Required if formula is not null.",
-                  },
-                  untie_col_id_from_label: {
-                    type: "boolean",
-                    description:
-                      "True if column ID should not be automatically changed to match label.",
-                  },
-                  description: {
-                    type: "string",
-                    description: "The column description.",
-                  },
-                  text_alignment: {
-                    type: "string",
-                    enum: ["left", "center", "right"],
-                    description: "The column text alignment.",
-                  },
-                  text_wrap: {
-                    type: "boolean",
-                    description:
-                      "True if text in the column should wrap to fit.",
-                  },
-                  choices: {
-                    type: "array",
-                    description:
-                      "List of valid choices. " +
-                      "Only applicable to Choice and ChoiceList columns.",
-                    items: {
-                      type: "string",
-                    },
-                  },
-                  choice_styles: {
-                    type: "object",
-                    description:
-                      "Optional styles for choices. " +
-                      "Keys are valid choices (e.g., 'Name', 'Age'). " +
-                      "Values are objects with keys: " +
-                      "textColor, fillColor, fontUnderline, fontItalic, and fontStrikethrough. " +
-                      "Colors must be in six-value hexadecimal syntax. " +
-                      'Example: `{"Choice 1": {"textColor": "#FFFFFF", "fillColor": "#16B378", ' +
-                      '"fontUnderline": false, "fontItalic": false, "fontStrikethrough": false}}`',
-                  },
-                  cell_text_color: {
-                    type: "string",
-                    description:
-                      "The cell text color. " +
-                      "Must be a six-value hexadecimal string. " +
-                      'Example: `"#FFFFFF"`',
-                  },
-                  cell_fill_color: {
-                    type: "string",
-                    description:
-                      "The cell fill color. " +
-                      "Must be a six-value hexadecimal string. " +
-                      'Example: `"#16B378"`',
-                  },
-                  cell_bold: {
-                    type: "boolean",
-                    description: "If cell text should be bolded.",
-                  },
-                  cell_underline: {
-                    type: "boolean",
-                    description: "If cell text should be underlined.",
-                  },
-                  cell_italic: {
-                    type: "boolean",
-                    description: "If cell text should be italicized.",
-                  },
-                  cell_strikethrough: {
-                    type: "boolean",
-                    description:
-                      "If cell text should have a horizontal line through the center.",
-                  },
-                  header_text_color: {
-                    type: "string",
-                    description:
-                      "The column header text color. " +
-                      "Must be a six-value hexadecimal string. " +
-                      'Example: `"#FFFFFF"`',
-                  },
-                  header_fill_color: {
-                    type: "string",
-                    description:
-                      "The column header fill color. " +
-                      "Must be a six-value hexadecimal string. " +
-                      'Example: `"#16B378"`',
-                  },
-                  header_bold: {
-                    type: "boolean",
-                    description: "If the header text should be bolded.",
-                  },
-                  header_underline: {
-                    type: "boolean",
-                    description: "If the header text should be underlined.",
-                  },
-                  header_italic: {
-                    type: "boolean",
-                    description: "If the header text should be italicized.",
-                  },
-                  header_strikethrough: {
-                    type: "boolean",
-                    description:
-                      "If the header text should have a horizontal line through the center.",
-                  },
-                  conditional_formatting_rules: {
-                    description:
-                      "Not yet supported. Must be configured manually in the creator panel.",
-                  },
-                },
-                additionalProperties: false,
-              },
-            },
-            required: ["table_id", "column_id", "column_options"],
-            additionalProperties: false,
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "update_column",
-          description: "Updates a column in a table.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table containing the column.",
-              },
-              column_id: {
-                type: "string",
-                description: "The ID of the column to update.",
-              },
-              column_options: {
-                type: "object",
-                description:
-                  "The column options to update. " +
-                  "Only include fields to set/update. " +
-                  'Example: `{"type": "Text", "label": "Name"}`',
-                properties: {
-                  id: {
-                    type: "string",
-                    description: "The column ID.",
-                  },
-                  type: {
-                    type: "string",
-                    enum: [
-                      "Any",
-                      "Text",
-                      "Numeric",
-                      "Int",
-                      "Bool",
-                      "Date",
-                      "DateTime",
-                      "Choice",
-                      "ChoiceList",
-                      "Ref",
-                      "RefList",
-                      "Attachments",
-                    ],
-                    description: "The column type.",
-                  },
-                  text_format: {
-                    type: "string",
-                    enum: ["text", "markdown", "hyperlink"],
-                    description:
-                      "The format of Text columns. " +
-                      "If unset, defaults to text.",
-                  },
-                  number_show_spinner: {
-                    type: "boolean",
-                    description:
-                      "Whether to show increment/decrement buttons. " +
-                      "If unset, defaults to false.",
-                  },
-                  number_format: {
-                    type: "string",
-                    enum: [
-                      "text",
-                      "currency",
-                      "decimal",
-                      "percent",
-                      "scientific",
-                    ],
-                    description:
-                      "The format of Int and Numeric columns. " +
-                      "If unset, defaults to text.",
-                  },
-                  number_currency_code: {
-                    type: "string",
-                    description:
-                      "ISO 4217 currency code (e.g. 'USD', 'GBP', 'JPY'). " +
-                      "Uses the document's currency if null or unset. " +
-                      "Only applies if number_format is currency.",
-                  },
-                  number_minus_sign: {
-                    type: "string",
-                    enum: ["minus", "parens"],
-                    description:
-                      "How to format negative numbers. " +
-                      "If unset, defaults to minus.",
-                  },
-                  number_min_decimals: {
-                    type: "number",
-                    description:
-                      "Minimum number of decimals for Int and Numeric columns.",
-                    minimum: 0,
-                    maximum: 20,
-                  },
-                  number_max_decimals: {
-                    type: "number",
-                    description:
-                      "Maximum number of decimals for Int and Numeric columns.",
-                    minimum: 0,
-                    maximum: 20,
-                  },
-                  toggle_format: {
-                    type: "string",
-                    enum: ["text", "checkbox", "switch"],
-                    description:
-                      "The format of Bool/Toggle columns. " +
-                      "If unset, defaults to checkbox.",
-                  },
-                  reference_table_id: {
-                    type: "string",
-                    description:
-                      "The ID of the referenced table. " +
-                      "Required if type is Ref or RefList.",
-                  },
-                  reference_show_column_id: {
-                    type: "string",
-                    description:
-                      "The ID of the column from the referenced table to show. " +
-                      "Required if type is Ref or RefList.",
-                  },
-                  date_format: {
-                    type: "string",
-                    enum: [
-                      "YYYY-MM-DD",
-                      "MM-DD-YYYY",
-                      "MM/DD/YYYY",
-                      "MM-DD-YY",
-                      "MM/DD/YY",
-                      "DD MMM YYYY",
-                      "MMMM Do, YYYY",
-                      "DD-MM-YYYY",
-                      "custom",
-                    ],
-                    description:
-                      "The date format of Date and DateTime columns. " +
-                      "If custom, date_custom_format must be set.",
-                  },
-                  date_custom_format: {
-                    type: "string",
-                    description:
-                      "A Moment.js date format string (e.g. 'ddd, hA'). " +
-                      "Only applied if date_format is custom.",
-                  },
-                  time_format: {
-                    type: "string",
-                    enum: [
-                      "h:mma",
-                      "h:mma z",
-                      "HH:mm",
-                      "HH:mm z",
-                      "HH:mm:ss",
-                      "HH:mm:ss z",
-                      "custom",
-                    ],
-                    description:
-                      "The time format of DateTime columns. " +
-                      "If custom, time_custom_format must be set.",
-                  },
-                  time_custom_format: {
-                    type: "string",
-                    description:
-                      "A Moment.js time format string (e.g. 'h:mm a'). " +
-                      "Only applied if time_format is custom.",
-                  },
-                  timezone: {
-                    type: "string",
-                    description:
-                      "The IANA TZ identifier (e.g. 'America/New_York') for DateTime columns. " +
-                      "If unset, the document's timezone will be used.",
-                  },
-                  attachment_height: {
-                    type: "number",
-                    description: "Height of attachment thumbnails in pixels. ",
-                    minimum: 16,
-                    maximum: 96,
-                  },
-                  label: {
-                    type: "string",
-                    description: "The column label.",
-                  },
-                  formula: {
-                    type: ["string", "null"],
-                    description:
-                      "The column formula. " +
-                      "Must be Grist-compatible Python syntax (e.g. `$Amount * 1.1`).",
-                  },
-                  formula_type: {
-                    type: ["string", "null"],
-                    enum: ["regular", "trigger"],
-                    description:
-                      "The formula type. " +
-                      "Regular formulas always recalculate whenever the document is loaded or data is changed. " +
-                      "Trigger formulas only recalculate according to formula_recalc_behavior. " +
-                      "Required if formula is not null.",
-                  },
-                  formula_recalc_behavior: {
-                    type: "string",
-                    enum: [
-                      "add-record",
-                      "add-or-update-record",
-                      "custom",
-                      "never",
-                    ],
-                    description:
-                      "When to recalculate the trigger formula. " +
-                      "add-record only calculates the formula when a record is first added. " +
-                      "add-or-update-record also recalculates the formula whenever a record updated. " +
-                      "custom only recalculates the formula whenever a record is added or " +
-                      "a column in formula_recalc_col_ids is updated.",
-                  },
-                  formula_recalc_col_ids: {
-                    type: "array",
-                    description:
-                      "If any of these columns change, the formula will be recalculated. " +
-                      "Required if formula_recalc_behavior is custom.",
-                    items: {
-                      type: "string",
-                    },
-                  },
-                  untie_col_id_from_label: {
-                    type: "boolean",
-                    description:
-                      "True if column ID should not be automatically changed to match label.",
-                  },
-                  description: {
-                    type: "string",
-                    description: "The column description.",
-                  },
-                  text_alignment: {
-                    type: "string",
-                    enum: ["left", "center", "right"],
-                    description: "The column text alignment.",
-                  },
-                  text_wrap: {
-                    type: "boolean",
-                    description:
-                      "True if text in the column should wrap to fit.",
-                  },
-                  choices: {
-                    type: "array",
-                    description:
-                      "List of valid choices. " +
-                      "Only applicable to Choice and ChoiceList columns.",
-                    items: {
-                      type: "string",
-                    },
-                  },
-                  choice_styles: {
-                    type: "object",
-                    description:
-                      "Optional styles for choices. " +
-                      "Keys are valid choices (e.g., 'Name', 'Age'). " +
-                      "Values are objects with keys: " +
-                      "textColor, fillColor, fontUnderline, fontItalic, and fontStrikethrough. " +
-                      "Colors must be in six-value hexadecimal syntax. " +
-                      'Example: `{"Choice 1": {"textColor": "#FFFFFF", "fillColor": "#16B378", ' +
-                      '"fontUnderline": false, "fontItalic": false, "fontStrikethrough": false}}`',
-                  },
-                  cell_text_color: {
-                    type: "string",
-                    description:
-                      "The cell text color. " +
-                      "Must be a six-value hexadecimal string. " +
-                      'Example: `"#FFFFFF"`',
-                  },
-                  cell_fill_color: {
-                    type: "string",
-                    description:
-                      "The cell fill color. " +
-                      "Must be a six-value hexadecimal string. " +
-                      'Example: `"#16B378"`',
-                  },
-                  cell_bold: {
-                    type: "boolean",
-                    description: "If cell text should be bolded.",
-                  },
-                  cell_underline: {
-                    type: "boolean",
-                    description: "If cell text should be underlined.",
-                  },
-                  cell_italic: {
-                    type: "boolean",
-                    description: "If cell text should be italicized.",
-                  },
-                  cell_strikethrough: {
-                    type: "boolean",
-                    description:
-                      "If cell text should have a horizontal line through the center.",
-                  },
-                  header_text_color: {
-                    type: "string",
-                    description:
-                      "The column header text color. " +
-                      "Must be a six-value hexadecimal string. " +
-                      'Example: `"#FFFFFF"`',
-                  },
-                  header_fill_color: {
-                    type: "string",
-                    description:
-                      "The column header fill color. " +
-                      "Must be a six-value hexadecimal string. " +
-                      'Example: `"#16B378"`',
-                  },
-                  header_bold: {
-                    type: "boolean",
-                    description: "If the header text should be bolded.",
-                  },
-                  header_underline: {
-                    type: "boolean",
-                    description: "If the header text should be underlined.",
-                  },
-                  header_italic: {
-                    type: "boolean",
-                    description: "If the header text should be italicized.",
-                  },
-                  header_strikethrough: {
-                    type: "boolean",
-                    description:
-                      "If the header text should have a horizontal line through the center.",
-                  },
-                  conditional_formatting_rules: {
-                    description:
-                      "Not yet supported. Must be configured manually in the creator panel.",
-                  },
-                },
-                additionalProperties: false,
-              },
-            },
-            required: ["table_id", "column_id", "column_options"],
-            additionalProperties: false,
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "remove_column",
-          description: "Removes a column from a table.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table containing the column.",
-              },
-              column_id: {
-                type: "string",
-                description: "The ID of the column to remove.",
-              },
-            },
-            required: ["table_id", "column_id"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "query_document",
-          description:
-            "Runs a SQL SELECT query against a Grist document and returns matching rows. " +
-            "Only SQLite-compatible SQL is supported.",
-          parameters: {
-            type: "object",
-            properties: {
-              query: {
-                type: "string",
-                description:
-                  "A SQL SELECT query to run on the Grist document. " +
-                  "Must be a single SELECT statement with no trailing semicolon. " +
-                  "WITH clauses are permitted. " +
-                  "Must be valid SQLite syntax.",
-              },
-              args: {
-                type: ["array", "null"],
-                description:
-                  "Arguments for parameters in query. " +
-                  "Null if query is not parameterized.",
-                items: {
-                  type: ["string", "number", "boolean", "null"],
-                },
-              },
-            },
-            required: ["query", "args"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "add_records",
-          description: "Adds one or more records to a table.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table to add the records to.",
-              },
-              records: {
-                type: "array",
-                description: "The records to add.",
-                items: {
-                  type: "object",
-                  description:
-                    "A record. Keys are column IDs (e.g., 'Name', 'Age'). " +
-                    'Example: `{"Name": "Alice", "Age": 30}`',
-                },
-              },
-            },
-            required: ["table_id", "records"],
-            additionalProperties: false,
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "update_records",
-          description: "Updates one or more records in a table.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table to update the records in.",
-              },
-              record_ids: {
-                type: "array",
-                description: "The IDs of the records to update.",
-                items: {
-                  type: "number",
-                },
-              },
-              records: {
-                type: "array",
-                description:
-                  "The records to update, in the same order as record_ids.",
-                items: {
-                  description:
-                    "A record. Keys are column IDs (e.g., 'Name', 'Age'). " +
-                    'Example: `{"Name": "Alice", "Age": 30}`',
-                },
-              },
-            },
-            required: ["table_id", "record_ids", "records"],
-            additionalProperties: false,
-          },
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "remove_records",
-          description: "Removes one or more records from a table.",
-          parameters: {
-            type: "object",
-            properties: {
-              table_id: {
-                type: "string",
-                description: "The ID of the table to remove the records from.",
-              },
-              record_ids: {
-                type: "array",
-                description: "The IDs of the records to remove.",
-                items: {
-                  type: "number",
-                },
-              },
-            },
-            required: ["table_id", "record_ids"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-    ];
+    return OPENAI_TOOLS;
   }
 
   private async _handleToolCalls(
@@ -1516,21 +673,15 @@ ${
             return {
               role: "tool" as const,
               tool_call_id,
-              content: JSON.stringify(result),
+              content: JSON.stringify(omit(result, "appliedActions")),
             };
           }),
         ],
       },
     };
-    const results = toolCallIdsAndResults.map(([_id, result]) => result);
-    const successResults = results.filter(
-      (result): result is FunctionCallSuccess => result.ok
-    );
-    const modifications = successResults.filter(
-      (result) => result.result.isModification
-    );
-    const appliedActions: ApplyUAResult[] = modifications
-      .map((m) => m.result)
+    const appliedActions = toolCallIdsAndResults
+      .map(([_id, result]) => result.appliedActions)
+      .filter((actions) => actions.filter((a) => a.isModification))
       .flat(1);
     return {
       completion: await this._getCompletion(docSession, doc, request),
@@ -1542,253 +693,330 @@ ${
     docSession: OptDocSession,
     doc: AssistanceDoc,
     name: string,
-    parameterArgs?: any
+    params: unknown
   ): Promise<FunctionCallResult> {
+    let result: any;
+    let appliedActions: ApplyUAResult[] = [];
     try {
-      let result: any;
       switch (name) {
         case "get_tables": {
           result = this._getTables(doc);
           break;
         }
         case "add_table": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          const { columns } = parameterArgs;
-          result = await this._addTable(docSession, doc, tableId, columns);
+          ({ result, appliedActions } = await this._addTable(
+            docSession,
+            doc,
+            params
+          ));
           break;
         }
         case "rename_table": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          const newTableId = stringParam(
-            parameterArgs.new_table_id,
-            "new_table_id"
-          );
-          result = await this._renameTable(
+          ({ result, appliedActions } = await this._renameTable(
             docSession,
             doc,
-            tableId,
-            newTableId
-          );
+            params
+          ));
           break;
         }
         case "remove_table": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          result = await this._removeTable(docSession, doc, tableId);
-          break;
-        }
-        case "get_columns": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          result = await doc.getTableCols(docSession, tableId);
-          break;
-        }
-        case "add_column": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          const columnId = stringParam(parameterArgs.column_id, "column_id");
-          const { column_options: options } = parameterArgs;
-          result = await this._addColumn(
+          ({ result, appliedActions } = await this._removeTable(
             docSession,
             doc,
-            tableId,
-            columnId,
-            options
-          );
+            params
+          ));
           break;
         }
-        case "update_column": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          const columnId = stringParam(parameterArgs.column_id, "column_id");
-          const { column_options: options } = parameterArgs;
-          if (options === null) {
-            throw new Error("column_options parameter is required");
-          }
-
-          result = await this._updateColumn(
+        case "get_table_columns": {
+          result = await this._getTableColumns(docSession, doc, params);
+          break;
+        }
+        case "add_table_column": {
+          ({ result, appliedActions } = await this._addTableColumn(
             docSession,
             doc,
-            tableId,
-            columnId,
-            options
-          );
+            params
+          ));
           break;
         }
-        case "remove_column": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          const columnId = stringParam(parameterArgs.column_id, "column_id");
-          result = await this._removeColumn(docSession, doc, tableId, columnId);
+        case "update_table_column": {
+          ({ result, appliedActions } = await this._updateTableColumn(
+            docSession,
+            doc,
+            params
+          ));
+          break;
+        }
+        case "remove_table_column": {
+          ({ result, appliedActions } = await this._removeTableColumn(
+            docSession,
+            doc,
+            params
+          ));
+          break;
+        }
+        case "get_pages": {
+          result = this._getPages(doc);
+          break;
+        }
+        case "update_page": {
+          ({ result, appliedActions } = await this._updatePage(
+            docSession,
+            doc,
+            params
+          ));
+          break;
+        }
+        case "remove_page": {
+          ({ result, appliedActions } = await this._removePage(
+            docSession,
+            doc,
+            params,
+            {
+              desc: "Called by OpenAIAssistantV2 (tool: remove_page)",
+            }
+          ));
+          break;
+        }
+        case "get_page_widgets": {
+          result = this._getPageWidgets(doc, params);
+          break;
+        }
+        case "add_page_widget": {
+          ({ result, appliedActions } = await this._addPageWidget(
+            docSession,
+            doc,
+            params
+          ));
+          break;
+        }
+        case "update_page_widget": {
+          ({ result, appliedActions } = await this._updatePageWidget(
+            docSession,
+            doc,
+            params,
+            {
+              desc: "Called by OpenAIAssistantV2 (tool: update_page_widget)",
+            }
+          ));
+          break;
+        }
+        case "remove_page_widget": {
+          ({ result, appliedActions } = await this._removePageWidget(
+            docSession,
+            doc,
+            params
+          ));
+          break;
+        }
+        case "get_available_custom_widgets": {
+          result = await this._getAvailableCustomWidgets();
           break;
         }
         case "query_document": {
-          const query = stringParam(parameterArgs.query, "query");
-          const args = parameterArgs.args;
-          result = await runSQLQuery(docSession, doc, {
-            sql: query,
-            args,
-          });
+          result = await this._queryDocument(docSession, doc, params);
           break;
         }
         case "add_records": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          const records = parameterArgs.records;
-          if (!records) {
-            throw new Error("records parameter is required");
-          }
-
-          result = await this._addRecords(docSession, doc, tableId, records);
+          ({ result, appliedActions } = await this._addRecords(
+            docSession,
+            doc,
+            params
+          ));
           break;
         }
         case "update_records": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          const records = parameterArgs.records;
-          const recordIds = parameterArgs.record_ids;
-          if (!records) {
-            throw new Error("records parameter is required");
-          }
-          if (!recordIds) {
-            throw new Error("record_ids parameter is required");
-          }
-
-          result = await this._updateRecords(
+          ({ result, appliedActions } = await this._updateRecords(
             docSession,
             doc,
-            tableId,
-            recordIds,
-            records
-          );
+            params
+          ));
           break;
         }
         case "remove_records": {
-          const tableId = stringParam(parameterArgs.table_id, "table_id");
-          const recordIds = parameterArgs.record_ids;
-          if (!recordIds) {
-            throw new Error("record_ids parameter is required");
-          }
-
-          result = await this._removeRecords(
+          ({ result, appliedActions } = await this._removeRecords(
             docSession,
             doc,
-            tableId,
-            recordIds
-          );
+            params
+          ));
           break;
         }
         default: {
           throw new Error(`Unrecognized function: ${name}`);
         }
       }
-      return { ok: true, result };
+      return { ok: true, result, appliedActions };
     } catch (e) {
       return {
         ok: false,
         error: String(e),
+        appliedActions,
       };
     }
   }
 
-  private _getTables(doc: AssistanceDoc): string[] {
-    const docData = doc.docData;
-    if (!docData) {
-      throw new Error("Document not ready");
-    }
-
+  private _getTables(doc: AssistanceDoc) {
+    const docData = getDocDataOrThrow(doc);
+    const getTitle = docData
+      .getMetaTable("_grist_Views_section")
+      .getRowPropFunc("title");
     const tables = docData
       .getMetaTable("_grist_Tables")
-      .getColValues("tableId")
-      .filter((tableId) => tableId && !tableId.startsWith("GristHidden_"));
-    return tables;
+      .getRecords()
+      .filter(({ tableId }) => tableId && !tableId.startsWith("GristHidden_"));
+    return tables.map((table) => {
+      return {
+        id: table.tableId,
+        name: getTitle(table.rawViewSectionRef),
+      };
+    });
   }
 
   private async _addTable(
     docSession: OptDocSession,
     doc: AssistanceDoc,
-    tableId: string,
-    columns: any[]
+    params: any
   ) {
-    const actions: UserAction[] = [];
-    if (!columns || columns.length === 0) {
+    AddTableParamsChecker.strictCheck(params);
+    const { table_id, columns } = params as AddTableParams;
+    let actions: UserAction[];
+    if (!columns) {
       // AddEmptyTable includes default columns ('A', 'B', 'C'), unlike
       // AddTable, which creates a table with no columns that appears broken
       // in the UI.
-      actions.push(["AddEmptyTable", tableId]);
+      actions = [["AddEmptyTable", table_id]];
     } else {
-      actions.push(["AddTable", tableId, columns]);
+      actions = [["AddTable", table_id, columns]];
     }
-    return await handleSandboxError(
-      tableId,
-      [],
-      doc.applyUserActions(docSession, actions, {
-        desc: "Called by OpenAIAssistantV2 (tool: add_table)",
-      })
-    );
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [],
+        doc.applyUserActions(docSession, actions, {
+          desc: "Called by OpenAIAssistantV2 (tool: add_table)",
+        })
+      ),
+    ];
+    return {
+      result: {
+        id: appliedActions[0].retValues[0].table_id,
+      },
+      appliedActions,
+    };
   }
 
   private async _renameTable(
     docSession: OptDocSession,
     doc: AssistanceDoc,
-    tableId: string,
-    newTableId: string
+    params: any
   ) {
-    return await handleSandboxError(
-      tableId,
-      [],
-      doc.applyUserActions(docSession, [["RenameTable", tableId, newTableId]], {
-        desc: "Called by OpenAIAssistantV2 (tool: rename_table)",
-      })
-    );
+    RenameTableParamsChecker.strictCheck(params);
+    const { table_id, new_table_id } = params as RenameTableParams;
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [],
+        doc.applyUserActions(
+          docSession,
+          [["RenameTable", table_id, new_table_id]],
+          {
+            desc: "Called by OpenAIAssistantV2 (tool: rename_table)",
+          }
+        )
+      ),
+    ];
+    return {
+      result: {
+        id: appliedActions[0].retValues[0],
+      },
+      appliedActions,
+    };
   }
 
   private async _removeTable(
     docSession: OptDocSession,
     doc: AssistanceDoc,
-    tableId: string
+    params: any
   ) {
-    return await handleSandboxError(
-      tableId,
-      [],
-      doc.applyUserActions(docSession, [["RemoveTable", tableId]], {
-        desc: "Called by OpenAIAssistantV2 (tool: remove_table)",
-      })
-    );
-  }
-
-  private async _addColumn(
-    docSession: OptDocSession,
-    doc: AssistanceDoc,
-    tableId: string,
-    columnId: string,
-    options: AddColumnOptions
-  ) {
-    const colInfo = options ? buildColInfo(doc, null, options) : {};
-    return await handleSandboxError(
-      tableId,
-      [columnId],
-      doc.applyUserActions(
-        docSession,
-        [["AddVisibleColumn", tableId, columnId, colInfo]],
-        {
-          desc: "Called by OpenAIAssistantV2 (tool: add_column)",
-        }
-      )
-    );
-  }
-
-  private async _updateColumn(
-    docSession: OptDocSession,
-    doc: AssistanceDoc,
-    tableId: string,
-    columnId: string,
-    options: UpdateColumnOptions
-  ) {
-    const columns = await doc.getTableCols(docSession, tableId);
-    const column = columns.find((c) => c.id === columnId);
-    if (!column) {
-      throw new Error(`Column ${columnId} not found`);
-    }
-
-    const colInfo = buildColInfo(doc, column, options);
-    const actions: UserAction[] = [
-      ["ModifyColumn", tableId, columnId, colInfo],
+    RemoveTableParamsChecker.strictCheck(params);
+    const { table_id } = params as RemoveTableParams;
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [],
+        doc.applyUserActions(docSession, [["RemoveTable", table_id]], {
+          desc: "Called by OpenAIAssistantV2 (tool: remove_table)",
+        })
+      ),
     ];
-    if (colInfo.visibleCol) {
+    return {
+      result: null,
+      appliedActions,
+    };
+  }
+
+  private async _getTableColumns(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    GetTableColumnsParamsChecker.strictCheck(params);
+    const { table_id } = params as GetTableColumnsParams;
+    return await doc.getTableCols(docSession, table_id);
+  }
+
+  private async _addTableColumn(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    AddTableColumnParamsChecker.strictCheck(params);
+    const { table_id, column_id, column_options } =
+      params as AddTableColumnParams;
+    const colInfo = column_options
+      ? buildColInfo(doc, null, column_options)
+      : {};
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [column_id],
+        doc.applyUserActions(
+          docSession,
+          [["AddVisibleColumn", table_id, column_id, colInfo]],
+          {
+            desc: "Called by OpenAIAssistantV2 (tool: add_table_column)",
+          }
+        )
+      ),
+    ];
+    return {
+      result: appliedActions[0].retValues[0].colId,
+      appliedActions,
+    };
+  }
+
+  private async _updateTableColumn(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    await this._checkUpdateTableColumnParams(docSession, doc, params);
+    const { table_id, column_id, column_options } =
+      params as UpdateTableColumnParams;
+    const column = await this._getTableColumn(
+      docSession,
+      doc,
+      table_id,
+      column_id
+    );
+    const colInfo = buildColInfo(doc, column, column_options);
+    const actions: UserAction[] = [
+      ["ModifyColumn", table_id, column_id, colInfo],
+    ];
+    if (
+      "reference_show_column_id" in column_options &&
+      column_options.reference_show_column_id !== undefined
+    ) {
       // TODO: also set visibleCol in create_column.
       //
       // SetDisplayFormula requires:
@@ -1801,101 +1029,476 @@ ${
       // isn't known ahead of time.
       actions.push([
         "SetDisplayFormula",
-        tableId,
+        table_id,
         null,
         column.fields["colRef"],
-        `$${column.id}.${options.reference_show_column_id}`,
+        `$${column.id}.${column_options.reference_show_column_id}`,
       ]);
     }
-    return await handleSandboxError(
-      tableId,
-      [columnId],
-      doc.applyUserActions(docSession, actions, {
-        desc: "Called by OpenAIAssistantV2 (tool: update_column)",
-      })
-    );
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [column_id],
+        doc.applyUserActions(docSession, actions, {
+          desc: "Called by OpenAIAssistantV2 (tool: update_table_column)",
+        })
+      ),
+    ];
+    return {
+      result: null,
+      appliedActions,
+    };
   }
 
-  private async _removeColumn(
+  private async _checkUpdateTableColumnParams(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ): Promise<void> {
+    if (
+      typeof params !== "object" ||
+      params === null ||
+      typeof params.table_id !== "string" ||
+      typeof params.column_id !== "string" ||
+      typeof params.column_options !== "object" ||
+      params.column_options === null ||
+      params.column_options.type !== undefined
+    ) {
+      UpdateTableColumnParamsChecker.strictCheck(params);
+      return;
+    }
+
+    const column = await this._getTableColumn(
+      docSession,
+      doc,
+      params.table_id,
+      params.column_id
+    );
+    const { type } = column.fields;
+    const paramsWithType = {
+      ...params,
+      column_options: {
+        ...params.column_options,
+        type: extractTypeFromColType(type as string),
+      },
+    };
+    UpdateTableColumnParamsChecker.strictCheck(paramsWithType);
+  }
+
+  private async _getTableColumn(
     docSession: OptDocSession,
     doc: AssistanceDoc,
     tableId: string,
     columnId: string
   ) {
-    return await handleSandboxError(
-      tableId,
-      [columnId],
-      doc.applyUserActions(docSession, [["RemoveColumn", tableId, columnId]], {
-        desc: "Called by OpenAIAssistantV2 (tool: remove_column)",
-      })
+    const columns = await doc.getTableCols(docSession, tableId);
+    const column = columns.find((c) => c.id === columnId);
+    if (!column) {
+      throw new Error(`Column ${columnId} not found`);
+    }
+
+    return column;
+  }
+
+  private async _removeTableColumn(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    RemoveTableColumnParamsChecker.strictCheck(params);
+    const { table_id, column_id } = params as RemoveTableColumnParams;
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [column_id],
+        doc.applyUserActions(
+          docSession,
+          [["RemoveColumn", table_id, column_id]],
+          {
+            desc: "Called by OpenAIAssistantV2 (tool: remove_table_column)",
+          }
+        )
+      ),
+    ];
+    return {
+      result: null,
+      appliedActions,
+    };
+  }
+
+  private _getPages(doc: AssistanceDoc) {
+    return getDocDataOrThrow(doc)
+      .getMetaTable("_grist_Views")
+      .getRecords()
+      .map((view) => pick(view, "id", "name"));
+  }
+
+  private async _updatePage(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    UpdatePageParamsChecker.strictCheck(params);
+    const { page_id, page_options } = params as UpdatePageParams;
+    const appliedActions = [
+      await doc.applyUserActions(
+        docSession,
+        [["UpdateRecord", "_grist_Views", page_id, pick(page_options, "name")]],
+        {
+          desc: "Called by OpenAIAssistantV2 (tool: update_page)",
+        }
+      ),
+    ];
+    return {
+      result: null,
+      appliedActions,
+    };
+  }
+
+  private async _removePage(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any,
+    applyUAOptions: ApplyUAOptions
+  ) {
+    RemovePageParamsChecker.strictCheck(params);
+    const { page_id } = params as RemovePageParams;
+    const appliedActions = [
+      await doc.applyUserActions(
+        docSession,
+        [["RemoveRecord", "_grist_Views", page_id]],
+        applyUAOptions
+      ),
+    ];
+    return {
+      result: null,
+      appliedActions,
+    };
+  }
+
+  private _getPageWidgets(doc: AssistanceDoc, params: any) {
+    GetPageWidgetsParamsChecker.strictCheck(params);
+    const { page_id } = params as GetPageWidgetsParams;
+    const docData = getDocDataOrThrow(doc);
+    const getTableId = docData
+      .getMetaTable("_grist_Tables")
+      .getRowPropFunc("tableId");
+    return docData
+      .getMetaTable("_grist_Views_section")
+      .filterRecords({ parentId: page_id })
+      .map(({ id, tableRef, title, description, parentKey }) => ({
+        id,
+        table_id: getTableId(tableRef),
+        title,
+        description,
+        type: parentKeyToWidgetType[parentKey] ?? parentKey,
+      }));
+  }
+
+  private async _addPageWidget(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    AddPageWidgetParamsChecker.strictCheck(params);
+    const { page_id, widget_options } = params as AddPageWidgetParams;
+    const { table_id, type, ...updateOptions } = widget_options;
+    let tableRef = table_id ? tableIdToRef(doc, table_id) : 0;
+    const appliedActions: ApplyUAResult[] = [];
+    const createViewSectionResult = await doc.applyUserActions(
+      docSession,
+      [["CreateViewSection", tableRef, page_id ?? 0, type, null, table_id]],
+      {
+        desc: "Called by OpenAIAssistantV2 (tool: add_page_widget)",
+      }
     );
+    appliedActions.push(createViewSectionResult);
+    const retValues = createViewSectionResult.retValues[0];
+    ({ tableRef } = retValues);
+    const { viewRef, sectionRef } = retValues;
+    if (Object.keys(updateOptions).length > 0) {
+      const { appliedActions: actions } = await this._updatePageWidget(
+        docSession,
+        doc,
+        { widget_id: sectionRef, widget_options: updateOptions },
+        {
+          desc: "Called by OpenAIAssistantV2 (tool: add_page_widget)",
+        }
+      );
+      appliedActions.push(...actions);
+    }
+    const result = {
+      table_id: tableRefToId(doc, tableRef),
+      page_id: viewRef,
+      widget_id: sectionRef,
+    };
+    return {
+      result,
+      appliedActions,
+    };
+  }
+
+  private async _updatePageWidget(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any,
+    applyUAOptions?: ApplyUAOptions
+  ) {
+    this._checkUpdatePageWidgetParams(doc, params);
+    const { widget_id, widget_options } = params;
+    const { parentKey, options: pageWidgetOptions } = this._getPageWidget(
+      doc,
+      widget_id
+    );
+
+    const parsedPageWidgetOptions = safeJsonParse(pageWidgetOptions, {});
+    const colValues: ColValues = pick(widget_options, "title", "description");
+
+    const originalType = parentKeyToWidgetType[parentKey] ?? parentKey;
+    const { type = originalType } = widget_options;
+    if (type !== originalType) {
+      colValues.parentKey = widgetTypeToParentKey[type] ?? type;
+    }
+
+    if (
+      type === "custom" &&
+      ("custom_widget_id" in widget_options ||
+        "custom_widget_url" in widget_options)
+    ) {
+      let customWidgetId: string | undefined;
+      let customWidgetUrl: string | undefined;
+      let customWidget: ICustomWidget | undefined;
+      if ("custom_widget_id" in widget_options) {
+        customWidgetId = widget_options.custom_widget_id;
+      } else {
+        customWidgetUrl = widget_options.custom_widget_url;
+      }
+
+      if (customWidgetId) {
+        const widgets = await this._gristServer
+          .getWidgetRepository()
+          .getWidgets();
+        customWidget = matchWidget(widgets, { widgetId: customWidgetId });
+        if (!customWidget) {
+          throw new Error(`Widget ${customWidgetId} not found`);
+        }
+      }
+      parsedPageWidgetOptions.customView = JSON.stringify({
+        mode: "url",
+        url: customWidget ? null : customWidgetUrl,
+        widgetId: customWidget?.widgetId ?? null,
+        pluginId: customWidget?.source?.pluginId ?? "",
+        widgetDef: customWidget ?? null,
+        access: AccessLevel.none,
+        columnsMapping: null,
+        widgetOptions: null,
+        renderAfterReady: customWidget?.renderAfterReady ?? false,
+      });
+    }
+
+    colValues.options = JSON.stringify(parsedPageWidgetOptions);
+
+    const appliedActions = [
+      await doc.applyUserActions(
+        docSession,
+        [["UpdateRecord", "_grist_Views_section", widget_id, colValues]],
+        applyUAOptions
+      ),
+    ];
+    return {
+      result: null,
+      appliedActions,
+    };
+  }
+
+  private _checkUpdatePageWidgetParams(
+    doc: AssistanceDoc,
+    params: any
+  ): asserts params is UpdatePageWidgetParams {
+    if (
+      typeof params !== "object" ||
+      params === null ||
+      typeof params.widget_id !== "number" ||
+      typeof params.widget_options !== "object" ||
+      params.widget_options === null ||
+      params.widget_options.type !== undefined
+    ) {
+      UpdatePageWidgetParamsChecker.strictCheck(params);
+      return;
+    }
+
+    const { parentKey } = this._getPageWidget(doc, params.widget_id);
+    const paramsWithType = {
+      ...params,
+      widget_options: {
+        ...params.widget_options,
+        type: parentKeyToWidgetType[parentKey] ?? parentKey,
+      },
+    };
+    UpdatePageWidgetParamsChecker.strictCheck(paramsWithType);
+  }
+
+  private _getPageWidget(doc: AssistanceDoc, widgetId: number) {
+    const widget = getDocDataOrThrow(doc)
+      .getMetaTable("_grist_Views_section")
+      .getRecord(widgetId);
+    if (!widget) {
+      throw new Error(`Widget ${widgetId} not found`);
+    }
+
+    return widget;
+  }
+
+  private async _removePageWidget(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    RemovePageWidgetParamsChecker.strictCheck(params);
+    const { widget_id } = params as RemovePageWidgetParams;
+    const docData = getDocDataOrThrow(doc);
+    const pageId = docData
+      .getMetaTable("_grist_Views_section")
+      .getValue(widget_id, "parentId");
+    if (!pageId) {
+      throw new Error(`Widget ${widget_id} does not belong to a page`);
+    }
+
+    const pageWidgets = docData
+      .getMetaTable("_grist_Views_section")
+      .filterRecords({ parentId: pageId });
+    let appliedActions: ApplyUAResult[];
+    if (pageWidgets.length === 1) {
+      ({ appliedActions } = await this._removePage(
+        docSession,
+        doc,
+        { page_id: pageId },
+        {
+          desc: "Called by OpenAIAssistantV2 (tool: remove_page_widget)",
+        }
+      ));
+    } else {
+      appliedActions = [
+        await doc.applyUserActions(
+          docSession,
+          [["RemoveRecord", "_grist_Views_section", widget_id]],
+          {
+            desc: "Called by OpenAIAssistantV2 (tool: remove_page_widget)",
+          }
+        ),
+      ];
+    }
+    return {
+      result: null,
+      appliedActions,
+    };
+  }
+
+  private async _getAvailableCustomWidgets() {
+    return this._gristServer.getWidgetRepository().getWidgets();
+  }
+
+  private async _queryDocument(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    QueryDocumentParamsChecker.strictCheck(params);
+    const { query: sql, args } = params as QueryDocumentParams;
+    return await runSQLQuery(docSession, doc, {
+      sql,
+      args,
+    });
   }
 
   private async _addRecords(
     docSession: OptDocSession,
     doc: AssistanceDoc,
-    tableId: string,
-    records: Partial<RowRecord>[]
+    params: any
   ) {
-    return await handleSandboxError(
-      tableId,
-      [],
-      doc.applyUserActions(
-        docSession,
-        [
+    AddRecordsParamsChecker.strictCheck(params);
+    const { table_id, records } = params as AddRecordsParams;
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [],
+        doc.applyUserActions(
+          docSession,
           [
-            "BulkAddRecord",
-            tableId,
-            arrayRepeat(records.length, null),
-            getColValues(records),
+            [
+              "BulkAddRecord",
+              table_id,
+              arrayRepeat(records.length, null),
+              getColValues(records),
+            ],
           ],
-        ],
-        {
-          desc: "Called by OpenAIAssistantV2 (tool: add_records)",
-          parseStrings: true,
-        }
-      )
-    );
+          {
+            desc: "Called by OpenAIAssistantV2 (tool: add_records)",
+            parseStrings: true,
+          }
+        )
+      ),
+    ];
+    const result = {
+      ids: appliedActions[0].retValues[0],
+    };
+    return {
+      result,
+      appliedActions,
+    };
   }
 
   private async _updateRecords(
     docSession: OptDocSession,
     doc: AssistanceDoc,
-    tableId: string,
-    recordIds: number[],
-    records: Partial<RowRecord>[]
+    params: any
   ) {
-    return await handleSandboxError(
-      tableId,
-      [],
-      doc.applyUserActions(
-        docSession,
-        [["BulkUpdateRecord", tableId, recordIds, getColValues(records)]],
-        {
-          desc: "Called by OpenAIAssistantV2 (tool: update_records)",
-          parseStrings: true,
-        }
-      )
-    );
+    UpdateRecordsParamsChecker.strictCheck(params);
+    const { table_id, record_ids, records } = params as UpdateRecordsParams;
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [],
+        doc.applyUserActions(
+          docSession,
+          [["BulkUpdateRecord", table_id, record_ids, getColValues(records)]],
+          {
+            desc: "Called by OpenAIAssistantV2 (tool: update_records)",
+            parseStrings: true,
+          }
+        )
+      ),
+    ];
+    return {
+      result: null,
+      appliedActions,
+    };
   }
 
   private async _removeRecords(
     docSession: OptDocSession,
     doc: AssistanceDoc,
-    tableId: string,
-    recordIds: number[]
+    params: any
   ) {
-    return await handleSandboxError(
-      tableId,
-      [],
-      doc.applyUserActions(
-        docSession,
-        [["BulkRemoveRecord", tableId, recordIds]],
-        {
-          desc: "Called by OpenAIAssistantV2 (tool: remove_records)",
-        }
-      )
-    );
+    RemoveRecordsParamsChecker.strictCheck(params);
+    const { table_id, record_ids } = params as RemoveRecordsParams;
+    const appliedActions = [
+      await handleSandboxError(
+        table_id,
+        [],
+        doc.applyUserActions(
+          docSession,
+          [["BulkRemoveRecord", table_id, record_ids]],
+          {
+            desc: "Called by OpenAIAssistantV2 (tool: remove_records)",
+          }
+        )
+      ),
+    ];
+    return {
+      result: null,
+      appliedActions,
+    };
   }
 
   private _buildResponse(
@@ -1957,7 +1560,7 @@ export class EchoAssistantV2 implements AssistantV2 {
       throw new Error("ERROR");
     }
     if (request.text === "SLOW") {
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 1000));
     }
 
     const messages = request.state?.messages || [];
@@ -1992,41 +1595,20 @@ export class EchoAssistantV2 implements AssistantV2 {
   }
 }
 
-async function getVisibleTableIds(
-  docSession: OptDocSession,
-  doc: AssistanceDoc,
-  viewId: number
-) {
-  const metaTables = await doc.fetchMetaTables(docSession);
-  const allViewSections = metaTables["_grist_Views_section"];
-  let [, , ids, vals] = allViewSections;
-  const viewSections = ids
-    .map((id, idx) => {
-      return {
-        id,
-        parentId: vals["parentId"][idx],
-        tableRef: vals["tableRef"][idx],
-      };
-    })
-    .filter((vs) => vs.parentId === viewId);
+const parentKeyToWidgetType: Record<string, string> = {
+  record: "table",
+  single: "card",
+  detail: "card_list",
+};
 
-  const allTables = metaTables["_grist_Tables"];
-  [, , ids, vals] = allTables;
-  const tablesByRef: Record<number, { id: number; tableId: CellValue }> = {};
-  ids.forEach((id, idx) => {
-    tablesByRef[id] = {
-      id,
-      tableId: vals["tableId"][idx],
-    };
-  });
+const widgetTypeToParentKey: Record<string, string> = {
+  table: "record",
+  card: "single",
+  card_list: "detail",
+};
 
-  return [
-    ...new Set(
-      viewSections
-        .map((vs) => tablesByRef[vs.parentId as number]?.tableId)
-        .filter((tableId) => tableId !== undefined)
-    ),
-  ];
+async function getView(doc: AssistanceDoc, viewId: number) {
+  return getDocDataOrThrow(doc).getMetaTable("_grist_Views").getRecord(viewId);
 }
 
 function buildColInfo(
@@ -2047,7 +1629,7 @@ function buildColInfo(
   }
 
   if (colInfo.type === "DateTime") {
-    const defaultTimezone = doc.docData?.docInfo().timezone ?? "UTC";
+    const defaultTimezone = getDocDataOrThrow(doc).docInfo().timezone ?? "UTC";
     colInfo.type += `:${options.timezone ?? defaultTimezone}`;
   }
 
@@ -2360,16 +1942,34 @@ function getErrorPlatform(tableId: string): TableOperationsPlatform {
   };
 }
 
+function tableIdToRef(doc: AssistanceDoc, tableId: string) {
+  const tableRef = getDocDataOrThrow(doc)
+    .getMetaTable("_grist_Tables")
+    .findRow("tableId", tableId);
+  if (tableRef === 0) {
+    throw new Error(`Table ${tableId} not found`);
+  }
+
+  return tableRef;
+}
+
+function tableRefToId(doc: AssistanceDoc, tableRef: number) {
+  const tableId = getDocDataOrThrow(doc)
+    .getMetaTable("_grist_Tables")
+    .getValue(tableRef, "tableId");
+  if (tableId === undefined) {
+    throw new Error(`Table ${tableRef} not found`);
+  }
+
+  return tableId;
+}
+
 function colIdsToRefs(
   doc: AssistanceDoc,
   tableIdOrRef: string | number,
   ...colIds: string[]
 ) {
-  const docData = doc.docData;
-  if (!docData) {
-    throw new Error("Document not ready");
-  }
-
+  const docData = getDocDataOrThrow(doc);
   let tableRef: number;
   if (typeof tableIdOrRef === "string") {
     tableRef = docData
@@ -2389,4 +1989,13 @@ function colIdsToRefs(
     .filter((r) => colIdsSet.has(r.colId))
     .map((r) => r.id);
   return colRefs;
+}
+
+function getDocDataOrThrow(doc: AssistanceDoc) {
+  const docData = doc.docData;
+  if (!docData) {
+    throw new Error("Document not ready");
+  }
+
+  return docData;
 }

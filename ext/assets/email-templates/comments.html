@@ -315,7 +315,7 @@
                   <b>{{this.author.name}}</b> commented
                 {{~/if~}}:
             
-                <p style="color: #999;margin-left: 10px;padding-left: 10px;border-left: 3px solid #ececec">{{this.body}}</p>
+                <p style="color: #999;margin-left: 10px;padding-left: 10px;border-left: 3px solid #ececec">{{this.text}}</p>
             </td>
           </tr>
         </table>
@@ -383,7 +383,7 @@
   <table align="center" role="presentation" cellspacing="0" width="100%" cellpadding="0" border="0" style="margin: auto;">
     <tr>
       <td class="button-td button-td-primary" width="100%" style="border-radius: 4px; background: #00BA6C; text-align: center;">
-        <a href="{{{docUrl}}}" class="button-a button-a-primary" clicktracking="off" style="background: #00BA6C; border: 1px solid #00BA6C; font-family: 'Rubik', Arial, sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 13px; line-height: 15px; font-weight: 500; text-decoration: none; padding: 13px 37px; color: #ffffff; display: block; border-radius: 4px;">OPEN DOCUMENT</a>
+        <a href="({{{../docUrl}}}#{{{this.anchorLink}}})" class="button-a button-a-primary" clicktracking="off" style="background: #00BA6C; border: 1px solid #00BA6C; font-family: 'Rubik', Arial, sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 13px; line-height: 15px; font-weight: 500; text-decoration: none; padding: 13px 37px; color: #ffffff; display: block; border-radius: 4px;">OPEN DOCUMENT</a>
       </td>
     </tr>
   </table>

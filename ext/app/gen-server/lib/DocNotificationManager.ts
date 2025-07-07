@@ -32,7 +32,7 @@ import { Document } from 'app/gen-server/entity/Document';
 import { DocScope, HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { BatchedJobs, Schedule } from 'app/server/lib/BatchedJobs';
 import { OptDocSession } from 'app/server/lib/DocSession';
-import { DocComment, extractUserRefsFromComment } from 'app/common/DocComments';
+import { DocComment } from 'app/common/DocComments';
 import { IDocNotificationManager } from 'app/server/lib/IDocNotificationManager';
 import { INotifier } from 'app/server/lib/INotifier';
 import { expressWrap } from 'app/server/lib/expressWrap';
@@ -51,8 +51,8 @@ import type { GranularAccessForBundle } from 'app/server/lib/GranularAccess';
 const schedulesByType: {[jobType: string]: Schedule} = {
   docChange: {
     type: 'email-docChange',
-    firstDelay: 2 * 60_000,   // 2 minutes
-    throttle: 15 * 60_000,    // 15 minutes
+    firstDelay: 1 * 60_000,   // 1 minutes
+    throttle: 5 * 60_000,     // 5 minutes
   },
   comment: {
     type: 'email-comments',
@@ -156,10 +156,9 @@ export class DocNotificationManager implements IDocNotificationManager {
     if (!authorUser) { return; }
     const authorUserId = authorUser.id;
 
-    const allComments = await accessControl.getCommentsInBundle();
-
     // In the common case of no comments and no docChange opt-in, we'll short-circuit and return.
-    const prefs = await this._fetchNotificationPrefs(docId, allComments.length > 0);
+    const hasComments = accessControl.hasCommentsInBundle();
+    const prefs = await this._fetchNotificationPrefs(docId, hasComments);
     if (prefs.length === 0) { return; }
 
     const promises: Promise<void>[] = [];
@@ -181,43 +180,41 @@ export class DocNotificationManager implements IDocNotificationManager {
 
     // Queue up notifications for comments. First check if we have any comments.
     // Note that by "mentioned" we mean also anyone who participated in the thread.
-    if (allComments.length > 0) {
-      // Collect the list of users mentioned for each comment.
-      const userRefsByComment = new Map<number, string[]>(allComments.map(c => [c.id, extractUserRefsFromComment(c)]));
+    if (hasComments) {
+      // Collect the list of users mentioned for each comment. The idea here is to figure out the target
+      // audience before applying any access rules to a specific user (which is potentially expensive op).
+      const allComments = await accessControl.getCommentsInBundle();
+      // This contains all users who should be notified by default if they didn't change their comments
+      // preference (which by default is 'relevant').
+      const mentionedUserRefs = new Set<string>(allComments.flatMap(c => c.audience));
 
-      // Collect full set of users mentioned in any comment in the bundle.
-      const mentionedUserRefs = new Set<string>();
-      for (const userRefs of userRefsByComment.values()) {
-        for (const userRef of userRefs) {
-          mentionedUserRefs.add(userRef);
-        }
-      }
-
-      // - For comments, we care about users who opted in AND those mentioned in comments.
-      //   1. extract all mentions anywhere among docActions, and list of comments.
-      //      if no comments, skip this.
-      //   2. combine users opted in to all, and users opted in to mentions who are mentioned
-      //   3. for all those, construct an "authorized docSession" for each, filter just comment
-      //      actions using granularAccess.
-      //      - Filter comments that include mention of that user.
-      //      - If any comments left, construct payload for that user
+      // Now for every user decide what comments they are interested in.
+      // 1. before applying access control, check user preference to see if there are any interesting comments at all.
+      // 2. if user is interested in some of the comments we have, apply access control to filter out comments
+      //    that are not visible to them.
+      // 3. if there are any comments left, construct the payload and queue them up for delivery.
       for (const {user, comments: commentsPref} of prefs) {
+        // Skip current user who is making a change.
+        if (user.id === authorUserId) { continue; }
         // Skip users who've opted out.
         if (commentsPref === 'none') { continue; }
-        // Skip users who only need replies & mentions but aren't mentioned at all.
-        if (commentsPref !== 'all' && !mentionedUserRefs.has(user.ref!)) { continue; }
-        // Figure out which comments this person is allowed to see.
+        // Skip users who are not mentioned in any comment or who didn't write any comments themselves and
+        // are not interested in all comments (The default value is only relevant comments).
+        if (user.ref && !mentionedUserRefs.has(user.ref) && commentsPref !== 'all') { continue; }
+        // Get comments visible to this user that were added in this bundle.
         const comments = await accessControl.getCommentsInBundle(user);
+        // If no comments visible to this user, skip.
         if (comments.length === 0) { continue; }
-        // Add authorUserId and hasMention fields.
-        let payload = comments.map((c: DocComment): CommentData => {
-          const hasMention = Boolean(userRefsByComment.get(c.id)?.includes(user.ref!));
+        // Decide which comments this user is interested in.
+        const commentsToNotify = commentsPref === 'all' ? comments : comments.filter(
+          c => c.audience.includes(user.ref!)
+        );
+        if (commentsToNotify.length === 0) { continue; }
+        // Add authorUserId, hasMention fields and anchorLink to each comment.
+        const payload = commentsToNotify.map((c: DocComment): CommentData => {
+          const hasMention = c.mentions.includes(user.ref!);
           return {authorUserId, hasMention, text: c.text, anchorLink: c.anchorLink};
         });
-        // For users who only need replies & mentions, omit notifications irrelavant to them.
-        if (commentsPref !== 'all') {
-          payload = payload.filter(c => c.hasMention);
-        }
         promises.push(this._pushComments(docId, user.id, payload));
       }
     }
@@ -325,7 +322,7 @@ class DocNotificationHandler {
       })),
     };
     const {userId} = parseBatchKey(batchKey);
-    await this._notifier.docNotification(userId, template);
+    await this._notifier.docNotification('docChanges', userId, template);
   }
 
   private async _sendComments(batchKey: string, comments: CommentData[]) {
@@ -345,7 +342,7 @@ class DocNotificationHandler {
       })),
     };
     const {userId} = parseBatchKey(batchKey);
-    await this._notifier.docNotification(userId, template);
+    await this._notifier.docNotification('comments', userId, template);
   }
 
   private async _getUserInfoById(userIds: number[]): Promise<Map<number, UserInfo>> {

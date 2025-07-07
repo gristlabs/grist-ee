@@ -25,3 +25,15 @@ Handlebars.registerHelper('notEquals', function (
 ): string {
   return a !== b ? options.fn(this) : options.inverse(this);
 });
+
+Handlebars.registerHelper('length', (items: unknown[]) => items.length);
+
+// greaterThen block helper to compare two numbers.
+Handlebars.registerHelper('greaterThan', function(
+  this: unknown,
+  a: number,
+  b: number,
+  options: HelperOptions
+): string {
+  return a > b ? options.fn(this) : options.inverse(this);
+});

@@ -9,7 +9,8 @@ import { Organization } from 'app/gen-server/entity/Organization';
 import { User } from 'app/gen-server/entity/User';
 import { Workspace } from 'app/gen-server/entity/Workspace';
 import { HomeDBManager, UserChange, UserIdDelta } from "app/gen-server/lib/homedb/HomeDBManager";
-import { NotifierEventName, SendGridAddress, SendGridBillingTemplate, SendGridInviteResourceKind,
+import { DocNotificationEvent, NotifierEventName,
+         SendGridAddress, SendGridBillingTemplate, SendGridInviteResourceKind,
          SendGridInviteTemplate, SendGridMail, SendGridMemberChangeTemplate,
          SendGridPersonalization, TwoFactorEvent } from 'app/gen-server/lib/NotifierTypes';
 import { GristServer } from 'app/server/lib/GristServer';
@@ -328,7 +329,7 @@ export class NotifierTools implements INotifierTools {
     };
   }
 
-  public async docNotification(userId: number, templateData: object) {
+  public async docNotification(event: DocNotificationEvent, userId: number, templateData: object) {
     const user = await this._dbManager.getFullUser(userId);
     const personalizations = [{
       to: [this._asSendGridAddress(user)],
@@ -338,7 +339,7 @@ export class NotifierTools implements INotifierTools {
     return {
       logging: [async () => { log.debug(`notifications: sending docNotification`); }],
       content: mail,
-      label: 'docNotification',
+      label: `${event} for user ${userId}`,
     };
   }
 
@@ -503,7 +504,7 @@ export class NotifierBase implements INotifier {
   }
 
   public async applyNotification(_eventName: NotifierEventName, _mail: Mailer<SendGridMail>,
-                                _notificationArgs?: any[]) {
+                                _notificationArgs: unknown[]) {
     // nothing to do, by default.
   }
 

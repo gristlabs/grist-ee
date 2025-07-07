@@ -1,9 +1,11 @@
 import { appSettings } from 'app/server/lib/AppSettings';
 import log from 'app/server/lib/log';
 import { getAppPathTo, getAppRoot } from 'app/server/lib/places';
-import { NotifierEventName, TemplateName, TwoFactorEvent } from 'app/gen-server/lib/NotifierTypes';
 import { Mailer, NotifierBase, NotifierConfig } from 'app/gen-server/lib/NotifierTools';
-import { DynamicTemplateData, SendGridAddress, SendGridMail } from 'app/gen-server/lib/NotifierTypes';
+import {
+  DocNotificationEvent, DynamicTemplateData, NotifierEventName,
+  SendGridAddress, SendGridMail, TemplateName, TwoFactorEvent,
+} from 'app/gen-server/lib/NotifierTypes';
 
 // This import runs code to register a few extra Handlebars helpers
 // needed for parity with the template features we use with SendGrid.
@@ -19,6 +21,17 @@ interface CompiledTemplates<T>{
   htmlTemplate: HandlebarsTemplateDelegate<T>;
 }
 
+function getTemplateName(eventName: NotifierEventName, arg: unknown): TemplateName|undefined {
+  switch (eventName) {
+    case 'addUser': return "invite";
+    case 'addBillingManager': return "billingManagerInvite";
+    case 'userChange': return "memberChange";
+    case 'trialPeriodEndingSoon': return "trialPeriodEndingSoon";
+    case 'twoFactorStatusChanged': return arg as TwoFactorEvent;
+    case 'docNotification': return arg as DocNotificationEvent;
+  }
+}
+
 export class SMTPNotifier extends NotifierBase {
   private _templates: { [Key in TemplateName as string]: CompiledTemplates<DynamicTemplateData> };
   private _transporter: nodemailer.Transporter;
@@ -31,33 +44,16 @@ export class SMTPNotifier extends NotifierBase {
   }
 
   public async applyNotification(eventName: NotifierEventName, mail: Mailer<SendGridMail>,
-                                 notificationArgs?: any[]) {
+                                 notificationArgs: unknown[]) {
     if (! await this._configurationWorks) {
       // We have no working configuration, attempt no emails.
       return;
     }
 
-    const eventTemplateNames = {
-      addUser: "invite",
-      addBillingManager: "billingManagerInvite",
-      userChange: "memberChange",
-      trialPeriodEndingSoon: "trialPeriodEndingSoon",
-      deleteUser: undefined,
-      firstLogin: undefined,
-      teamCreator: undefined,
-      trialingSubscription: undefined,
-      scheduledCall: undefined,
-      streamingDestinationsChange: undefined,
-      twoFactorStatusChanged: undefined,
-      testSendGridExtensions: undefined,
-      docNotification: undefined,
-    };
-
     // For the 2FA event, there is a further subtype passed in as the
     // first argument of the notification function. That argument is
     // both the event name and the template name.
-    const templateName = (eventName === "twoFactorStatusChanged") ?
-      (notificationArgs![0] as TwoFactorEvent) : eventTemplateNames[eventName];
+    const templateName = getTemplateName(eventName, notificationArgs[0]);
     if (!templateName) {
       log.debug(`SMTPNotifier: no template for event ${eventName}, sending no emails`);
       return;
@@ -90,7 +86,7 @@ export class SMTPNotifier extends NotifierBase {
       defaultValue: getAppPathTo(getAppRoot(), 'ext/assets/email-templates'),
     });
 
-    const subjectTemplates = {
+    const subjectTemplates: Record<TemplateName, string> = {
       billingManagerInvite: "Grist invite to {{{ resource.name }}}",
       invite: "Grist invite to {{{ resource.name }}}",
       memberChange: "Membership has changed for {{org.name}}",
@@ -100,6 +96,8 @@ export class SMTPNotifier extends NotifierBase {
       twoFactorMethodAdded: "2FA Method Added",
       twoFactorMethodRemoved: "2FA Method Removed",
       twoFactorPhoneNumberChanged: "Phone number changed",
+      docChanges: "Updates to {{{ docName }}}",
+      comments: "New comments in {{{ docName }}}",
     };
     this._templates = {};
     for(const templateName of TemplateName.values) {
