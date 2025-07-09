@@ -15,8 +15,6 @@ export function configureEnterpriseAuditLogger(
     allowDestination() {
       return !gristServer.isRestrictedMode();
     },
-    subscribe(callback) {
-      gristServer.onStreamingDestinationsChange(callback);
-    }
+    gristServer,
   });
 }

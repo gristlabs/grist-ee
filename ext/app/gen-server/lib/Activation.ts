@@ -10,9 +10,7 @@ import {GristServer} from 'app/server/lib/GristServer';
 import {IBilling} from 'app/server/lib/IBilling';
 import {LogMethods} from 'app/server/lib/LogMethods';
 import {optIntegerParam, sendOkReply, stringParam} from 'app/server/lib/requestUtils';
-import {getPubSubPrefix} from 'app/server/lib/serverUtils';
 import * as express from 'express';
-import {createClient, RedisClient} from 'redis';
 
 
 /*
@@ -68,8 +66,8 @@ activation row in database was updated by another request or server.
 export class Activation implements IBilling {
   private readonly _activationManager: ActivationsManager;
   private readonly _activationReader: ActivationReader;
-  private _redisClient: RedisClient | null = null;
-  private readonly _redisChannel = `${getPubSubPrefix()}-activations:change`;
+  private _pubSubUnsubscribe: () => void;
+  private readonly _redisChannel = `activations:change`;
   private _lastCheck: number | null = null;
   private _currentCheck: Promise<void> | null = null;
 
@@ -97,26 +95,14 @@ export class Activation implements IBilling {
     keys = keys || KEYS;
     this._activationManager = new ActivationsManager(this._dbManager);
     this._activationReader = new ActivationReader(this._activationManager, keys);
-    if (process.env.REDIS_URL) {
-      this._redisClient = createClient(process.env.REDIS_URL);
-      this._redisClient.subscribe(this._redisChannel);
-      this._redisClient.on("message", async () => {
-        await this._readLatest();
-      });
-      this._redisClient.on("error", (error) => {
-        this._log.error(
-          null,
-          `encountered error while subscribed to channel ${this._redisChannel}`,
-          error
-        );
-      });
-    }
+
+
+    this._pubSubUnsubscribe = _gristServer.getPubSubManager()
+      .subscribe(this._redisChannel, (message) => this._readLatest());
   }
 
   public async close() {
-    if (this._redisClient) {
-      await this._redisClient.quitAsync();
-    }
+    this._pubSubUnsubscribe();
   }
 
   public addEndpoints(app: express.Express): void {
@@ -252,16 +238,11 @@ export class Activation implements IBilling {
   }
 
   private async _notifyServers() {
-    if (process.env.REDIS_URL) {
-      const client = createClient(process.env.REDIS_URL);
-      try {
-        await client.publishAsync(this._redisChannel, 'change');
-      } catch (e) {
-        this._log.error(null, 'failed to notify servers about activation change', e);
-        throw e;
-      } finally {
-        await client.quitAsync();
-      }
+    try {
+      await this._gristServer.getPubSubManager().publish(this._redisChannel, 'change');
+    } catch (e) {
+      this._log.error(null, 'failed to notify servers about activation change', e);
+      throw e;
     }
   }
 

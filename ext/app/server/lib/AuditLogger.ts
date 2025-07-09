@@ -11,11 +11,11 @@ import {
   AuditEventContext,
 } from "app/server/lib/AuditEvent";
 import { AuditEventFormatter } from "app/server/lib/AuditEventFormatter";
+import { GristServer } from "app/server/lib/GristServer";
 import { AuditEventProperties, IAuditLogger } from "app/server/lib/IAuditLogger";
 import { LogMethods } from "app/server/lib/LogMethods";
 import { fetchUntrustedWithAgent } from "app/server/lib/ProxyAgent";
 import { getOriginIpAddress } from "app/server/lib/requestUtils";
-import { getPubSubPrefix } from "app/server/lib/serverUtils";
 import {
   getAuthSession,
   getLogMeta,
@@ -24,7 +24,6 @@ import {
 } from "app/server/lib/sessionUtils";
 import moment from "moment-timezone";
 import { AbortSignal } from "node-fetch/externals";
-import { createClient, RedisClient } from "redis";
 import { inspect } from "util";
 import { v4 as uuidv4 } from "uuid";
 
@@ -34,12 +33,12 @@ export const Deps = {
 };
 
 interface AuditLoggerOptions {
+  gristServer: GristServer;
   formatters: AuditEventFormatter[];
   allowDestination(
     destination: AuditLogStreamingDestination,
     org: Organization | null
   ): boolean;
-  subscribe?(callback: (orgId?: number) => Promise<void>): void;
 }
 
 export class AuditLogger implements IAuditLogger {
@@ -61,15 +60,32 @@ export class AuditLogger implements IAuditLogger {
     "AuditLogger ",
     (requestOrSession) => getLogMeta(requestOrSession)
   );
-  private _redisClient: RedisClient | null = null;
-  private readonly _redisChannel = `${getPubSubPrefix()}-audit-logger-streaming-destinations:change`;
+  private _pubSubUnsubscribe: () => void;
   private _createdPromises: Set<Promise<any>>|null = new Set();
   private _closed = false;
   private _allowDestination = this._options.allowDestination;
 
   constructor(private _db: HomeDBManager, private _options: AuditLoggerOptions) {
     this._initializeFormatters();
-    this._subscribeToStreamingDestinations();
+
+    // Each server may get an instruction to change streaming destinations, which it will publish
+    // via pubsub to all servers. They all listen, and invalidate streaming destinations on receipt.
+    const channel = `audit-logger-streaming-destinations:change`;
+    const pubSubManager = this._options.gristServer.getPubSubManager();
+
+    this._options.gristServer.onStreamingDestinationsChange(async (orgId?: number|null) => {
+      if (orgId === undefined) { orgId = null; }
+      this._invalidateStreamingDestinations(orgId);
+
+      return pubSubManager.publish(channel, JSON.stringify({ orgId }))
+        .catch(error => this._logger.error(null,
+          `failed to publish message to channel ${channel}`, {error, orgId}));
+    });
+
+    this._pubSubUnsubscribe = pubSubManager.subscribe(channel, (message) => {
+      const { orgId } = JSON.parse(message);
+      this._invalidateStreamingDestinations(orgId);
+    });
   }
 
   public async close(timeout = 10_000) {
@@ -96,8 +112,8 @@ export class AuditLogger implements IAuditLogger {
     this._installStreamingDestinations.clear();
     this._orgStreamingDestinations.clear();
 
-    // Close the redis clients if they weren't already.
-    await this._redisClient?.quitAsync();
+    // Clean up the subscription to the pubsub event for changing streaming destinations.
+    this._pubSubUnsubscribe();
 
     // Abort all pending requests.
     this._abortController.abort();
@@ -279,11 +295,6 @@ export class AuditLogger implements IAuditLogger {
     }
   }
 
-  private async _handleStreamingDestinationsChange(orgId: number | null) {
-    this._invalidateStreamingDestinations(orgId);
-    await this._publishStreamingDestinationsChange(orgId);
-  }
-
   private _invalidateStreamingDestinations(orgId: number | null) {
     if (orgId === null) {
       this._installStreamingDestinations.clear();
@@ -298,49 +309,6 @@ export class AuditLogger implements IAuditLogger {
       for (const destination of streamingDestinations) {
         this._formatters.set(destination, formatter);
       }
-    }
-  }
-
-  private _subscribeToStreamingDestinations() {
-    this._options.subscribe?.(async (orgId?: number) => {
-      await this._handleStreamingDestinationsChange(orgId ?? null);
-    });
-
-    if (!process.env.REDIS_URL) {
-      return;
-    }
-
-    this._redisClient ??= createClient(process.env.REDIS_URL);
-    this._redisClient.subscribe(this._redisChannel);
-    this._redisClient.on("message", async (_, message) => {
-      const { orgId } = JSON.parse(message);
-      this._invalidateStreamingDestinations(orgId);
-    });
-    this._redisClient.on("error", async (error) => {
-      this._logger.error(
-        null,
-        `encountered error while subscribed to channel ${this._redisChannel}`,
-        error
-      );
-    });
-  }
-
-  private async _publishStreamingDestinationsChange(orgId: number | null) {
-    if (!process.env.REDIS_URL) {
-      return;
-    }
-    this._redisClient ??= createClient(process.env.REDIS_URL);
-    try {
-      await this._redisClient.publishAsync(this._redisChannel, JSON.stringify({ orgId }));
-    } catch (error) {
-      this._logger.error(
-        null,
-        `failed to publish message to channel ${this._redisChannel}`,
-        {
-          error,
-          orgId,
-        }
-      );
     }
   }
 

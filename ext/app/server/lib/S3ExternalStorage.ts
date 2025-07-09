@@ -1,7 +1,8 @@
+import {Upload} from "@aws-sdk/lib-storage";
 import {ApiError} from 'app/common/ApiError';
 import {ObjMetadata, ObjSnapshotWithMetadata, toExternalMetadata, toGristMetadata} from 'app/common/DocSnapshot';
 import {ExternalStorage} from 'app/server/lib/ExternalStorage';
-import S3 from 'aws-sdk/clients/s3';
+import { DeleteObjectsRequest, GetObjectCommand, ObjectVersion, S3 } from '@aws-sdk/client-s3';
 import * as fse from 'fs-extra';
 import * as stream from 'node:stream';
 
@@ -10,7 +11,7 @@ import * as stream from 'node:stream';
  */
 export class S3ExternalStorage implements ExternalStorage {
   // Create an S3 client. Using an explicit API version seems recommended.
-  private _s3 = new S3({apiVersion: '2006-03-01'});
+  private _s3 = new S3({});
 
   // Specify bucket to use, and optionally the max number of keys to request
   // in any call to listObjectVersions (used for testing)
@@ -24,8 +25,8 @@ export class S3ExternalStorage implements ExternalStorage {
     try {
       const head = await this._s3.headObject({
         Bucket: this.bucket, Key: key,
-        ...snapshotId && {VersionId: snapshotId},
-      }).promise();
+        ...(snapshotId && {VersionId: snapshotId}),
+      });
       if (!head.LastModified || !head.VersionId) {
         // AWS documentation says these fields will be present.
         throw new Error('S3ExternalStorage.head did not get expected fields');
@@ -33,7 +34,7 @@ export class S3ExternalStorage implements ExternalStorage {
       return {
         lastModified: head.LastModified.toISOString(),
         snapshotId: head.VersionId,
-        ...head.Metadata && { metadata: toGristMetadata(head.Metadata) },
+        ...(head.Metadata && { metadata: toGristMetadata(head.Metadata) }),
       };
     } catch (err) {
       if (!this.isFatalError(err)) { return null; }
@@ -52,11 +53,15 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   public async uploadStream(key: string, inStream: stream.Readable, size?: number|undefined, metadata?: ObjMetadata) {
-    const result = await this._s3.upload({
-      Bucket: this.bucket, Key: key, Body: inStream,
-      ...size && { ContentLength: size },
-      ...metadata && {Metadata: toExternalMetadata(metadata)}
-    }).promise();
+    const upload = new Upload({
+      client: this._s3,
+      params: {
+        Bucket: this.bucket, Key: key, Body: inStream,
+        ...(size && { ContentLength: size }),
+        ...(metadata && {Metadata: toExternalMetadata(metadata)})
+      }
+    });
+    const result = await upload.done();
     // Empirically VersionId is available in result for buckets with versioning enabled.
     // We rely on this only to detect stale versions() results.
     return (result as any).VersionId || null;
@@ -69,45 +74,25 @@ export class S3ExternalStorage implements ExternalStorage {
     return download.metadata.snapshotId;
   }
 
-  public async downloadStream(key: string, snapshotId?: string ) {
-    const request = this._s3.getObject({
-      Bucket: this.bucket, Key: key, ...snapshotId && {VersionId: snapshotId}
-    });
-    // We need to read headers before starting to stream to file, so we can catch
-    // version information.  See https://github.com/aws/aws-sdk-js/pull/345
-    const headers = await new Promise<Record<string, string>|null>((resolve, reject) => {
-      request.on('httpHeaders', function(statusCode, httpHeaders) {
-        if (statusCode < 300) {
-          resolve(httpHeaders);
-        } else {
-          // resolve as null, and let the read stream report the error.
-          resolve(null);
-        }
-      }).on('error', reject).send();
-    });
-    if (headers === null) {
-      // There has been an error. Detailed error information may be in the stream.
-      // Let this get reported when the stream is read.
-      return {
-        metadata: {
-          snapshotId: "",
-          size: 0,
-        },
-        contentStream: request.createReadStream(),
-      };
-    }
-    // For a versioned bucket, the header 'x-amz-version-id' contains a version id.
-    const downloadedSnapshotId = headers['x-amz-version-id'] || '';
-    const fileSize = Number(headers['content-length']);
+  public async downloadStream(key: string, snapshotId?: string) {
+    const response = await this._s3.send(new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ...(snapshotId && { VersionId: snapshotId }),
+    }));
+
+    const downloadedSnapshotId = response.VersionId ?? '';
+    const fileSize = Number(response.ContentLength);
     if (Number.isNaN(fileSize)) {
       throw new ApiError('download error - bad file size', 500);
     }
+    const contentStream = response.Body as stream.Readable;
     return {
       metadata: {
         snapshotId: downloadedSnapshotId,
         size: fileSize,
       },
-      contentStream: request.createReadStream(),
+      contentStream,
     };
   }
 
@@ -124,14 +109,14 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   public async versions(key: string) {
-    const versions: S3.ObjectVersion[] = [];
+    const versions: ObjectVersion[] = [];
     let KeyMarker: string|undefined;
     let VersionIdMarker: string|undefined;
     for (;;) {
       const status = await this._s3.listObjectVersions({
         Bucket: this.bucket, Prefix: key, KeyMarker, VersionIdMarker,
-        ...this._batchSize && {MaxKeys: this._batchSize}
-      }).promise();
+        ...(this._batchSize && {MaxKeys: this._batchSize})
+      });
       if (status.Versions) { versions.push(...status.Versions); }
       if (!status.IsTruncated) { break; }   // we are done!
       KeyMarker = status.NextKeyMarker;
@@ -150,7 +135,7 @@ export class S3ExternalStorage implements ExternalStorage {
   }
 
   public isFatalError(err: any) {
-    return err.code !== 'NotFound' && err.code !== 'NoSuchKey';
+    return err.name !== 'NotFound' && err.name !== 'NoSuchKey';
   }
 
   public async close() {
@@ -163,14 +148,14 @@ export class S3ExternalStorage implements ExternalStorage {
   } = {}) {
     let KeyMarker: string|undefined;
     let VersionIdMarker: string|undefined;
-    const keyMatch = (v: S3.ObjectVersion) => {
+    const keyMatch = (v: ObjectVersion) => {
       return options.prefixMatch || v.Key == key;
     };
     for (;;) {
       const status = await this._s3.listObjectVersions({
         Bucket: this.bucket, Prefix: key, KeyMarker, VersionIdMarker,
-        ...this._batchSize && {MaxKeys: this._batchSize}
-      }).promise();
+        ...(this._batchSize && {MaxKeys: this._batchSize})
+      });
       if (status.Versions) {
         await this._deleteBatch(key, status.Versions.filter(keyMatch).map(v => v.VersionId));
       }
@@ -190,7 +175,7 @@ export class S3ExternalStorage implements ExternalStorage {
     const N = this._batchSize || 1000;
     for (let i = 0; i < versions.length; i += N) {
       const iVersions = versions.slice(i, i + N);
-      const params: S3.DeleteObjectsRequest = {
+      const params: DeleteObjectsRequest = {
         Bucket: this.bucket,
         Delete: {
           Objects: iVersions.filter(v => v).map(v => ({
@@ -200,8 +185,8 @@ export class S3ExternalStorage implements ExternalStorage {
           Quiet: true
         }
       };
-      if (params.Delete.Objects.length === 0) { continue; }
-      await this._s3.deleteObjects(params).promise();
+      if (!params.Delete?.Objects?.length) { continue; }
+      await this._s3.deleteObjects(params);
     }
   }
 }

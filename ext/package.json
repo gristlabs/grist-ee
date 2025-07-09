@@ -2,7 +2,9 @@
   "dependencies": {
     "@azure/storage-blob": "12.9.0",
     "@types/nodemailer": "^6.4.17",
-    "aws-sdk": "2.1061.0",
+    "@aws-sdk/client-cognito-identity-provider": "3.830.0",
+    "@aws-sdk/client-s3": "3.830.0",
+    "@aws-sdk/lib-storage": "3.830.0",
     "handlebars": "^4.7.8",
     "nodemailer": "^6.10.0",
     "perfect-debounce": "1.0.0"
