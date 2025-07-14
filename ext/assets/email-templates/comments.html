@@ -275,8 +275,7 @@
         
         {{#greaterThan (length comments) 1}}
           <p style="margin: 20px 0 10px; color: #555555;">
-          {{length comments}} new comments from&nbsp;
-              {{~#equals (length authorNames) 1~}}
+          {{length comments}} new comments from {{#equals (length authorNames) 1~}}
                 {{authorNames.[0]}}
               {{~else~}}
                 {{~#equals (length authorNames) 2~}}
@@ -314,8 +313,8 @@
                 {{~else~}}
                   <b>{{this.author.name}}</b> commented
                 {{~/if~}}:
-            
-                <p style="color: #999;margin-left: 10px;padding-left: 10px;border-left: 3px solid #ececec">{{this.text}}</p>
+            </p>
+            <p style="color: #999;margin-left: 10px;padding-left: 10px;border-left: 3px solid #ececec">{{this.text}}</p>
             </td>
           </tr>
         </table>
@@ -326,7 +325,7 @@
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
           <tr>
             <td dir="ltr" valign="top" style="font-family: 'Rubik', Arial, sans-serif; font-size: 13px; line-height: 20px; color: #838B8D; padding: 10px 0; text-align: left;" class="center-on-narrow">
-                <a href="{{{this.anchorLink}}}" class="button-comment button-a-primary" clicktracking="off" style="background: #fff; border: 3px solid #00BA6C; font-family: 'Rubik', Arial, sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 13px; line-height: 15px; font-weight: 500; text-decoration: none; padding: 13px; color: #00BA6C; display: block; border-radius: 4px;">VIEW</a>
+                <a href="{{docUrl}}#{{this.anchorLink}}" class="button-comment button-a-primary" clicktracking="off" style="background: #fff; border: 3px solid #00BA6C; font-family: 'Rubik', Arial, sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 13px; line-height: 15px; font-weight: 500; text-decoration: none; padding: 13px; color: #00BA6C; display: block; border-radius: 4px;">VIEW</a>
             </td>
           </tr>
         </table>
@@ -334,7 +333,8 @@
       <!-- Column : END -->
     </tr>
   </table>
-</td>      
+</td>
+</tr>
 {{/each}}
 
 <tr>
@@ -383,7 +383,7 @@
   <table align="center" role="presentation" cellspacing="0" width="100%" cellpadding="0" border="0" style="margin: auto;">
     <tr>
       <td class="button-td button-td-primary" width="100%" style="border-radius: 4px; background: #00BA6C; text-align: center;">
-        <a href="({{{../docUrl}}}#{{{this.anchorLink}}})" class="button-a button-a-primary" clicktracking="off" style="background: #00BA6C; border: 1px solid #00BA6C; font-family: 'Rubik', Arial, sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 13px; line-height: 15px; font-weight: 500; text-decoration: none; padding: 13px 37px; color: #ffffff; display: block; border-radius: 4px;">OPEN DOCUMENT</a>
+        <a href="{{docUrl}}" class="button-a button-a-primary" clicktracking="off" style="background: #00BA6C; border: 1px solid #00BA6C; font-family: 'Rubik', Arial, sans-serif; text-transform: uppercase; letter-spacing: 1px; font-size: 13px; line-height: 15px; font-weight: 500; text-decoration: none; padding: 13px 37px; color: #ffffff; display: block; border-radius: 4px;">OPEN DOCUMENT</a>
       </td>
     </tr>
   </table>

@@ -26,6 +26,7 @@ import {
   SendGridContact,
   SendGridSearchHit, SendGridSearchResult, SendGridSearchResultVariant
 } from 'app/gen-server/lib/SendGridTypes';
+import {appSettings} from 'app/server/lib/AppSettings';
 import {GristServer} from 'app/server/lib/GristServer';
 import {BaseNotifier, INotifier} from 'app/server/lib/INotifier';
 import log from 'app/server/lib/log';
@@ -58,13 +59,16 @@ export type NotifierSendMessageCallback = (body: SendGridMailWithTemplateId, des
  */
 export class UnsubscribeNotifier extends BaseNotifier {
   protected _testSendMessageCallback?: NotifierSendMessageCallback;
+  protected readonly _sendGridKey: string|undefined =
+    appSettings.section('notifications').flag('sendGridKey')
+    .readString({envVar: 'SENDGRID_API_KEY', censor: true});
 
   public constructor(protected _dbManager: HomeDBManager, protected _sendgridConfig: SendGridConfig) {
     super();
   }
 
   public override async deleteUser(userId: number) {
-    if (!this._getKey()) {
+    if (!this._sendGridKey) {
       log.warn(`API key not set, cannot delete user ${userId} from sendgrid`);
       return;
     }
@@ -125,10 +129,9 @@ export class UnsubscribeNotifier extends BaseNotifier {
    * add retries.
    */
   protected async _fetch(path: string, options: {method: string, body?: any}) {
-    const sendGridKey = this._getKey();
-    if (!sendGridKey) { throw new Error('sendgrid not available'); }
+    if (!this._sendGridKey) { throw new Error('sendgrid not available'); }
     const headers = {
-      'Authorization': `Bearer ${sendGridKey}`,
+      'Authorization': `Bearer ${this._sendGridKey}`,
       'Content-Type': 'application/json'
     };
     if (options.body) {
@@ -138,13 +141,6 @@ export class UnsubscribeNotifier extends BaseNotifier {
       headers,
       ...options
     });
-  }
-
-  /**
-   * Get sendgrid api key if available (otherwise returns undefined).
-   */
-  protected _getKey(): string | undefined {
-    return process.env.SENDGRID_API_KEY;
   }
 }
 
@@ -203,13 +199,21 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     if (this._testSendMessageCallback) {
       return this._testSendMessageCallback(body, description);
     }
-    if (!this._getKey()) {
+    if (!this._sendGridKey) {
       log.debug(`sendgrid skipped: ${description}`);
       return;
     }
     const response = await this._fetch(SENDGRID_API_CONFIG.send, {
       method: 'POST',
-      body
+      body: {
+        // Disable click-tracking for transactional emails. It's not helpful to us, and for users,
+        // it reduces privacy and obscures URLs.
+        tracking_settings: {
+          click_tracking: {enable: false, enable_text: false},
+          open_tracking: {enable: false},
+        },
+        ...body
+      }
     });
     if (!response.ok) {
       log.error(`sendgrid error ${response.status} ${response.statusText}: ${description}`);
@@ -222,7 +226,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
    * Send new or updated contact information to sendgrid.
    */
   public async sendContactInfo(body: SendGridContact, description: string) {
-    if (!this._getKey()) {
+    if (!this._sendGridKey) {
       log.debug(`sendgrid skipped: ${description}`);
       return;
     }
@@ -406,7 +410,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     create: boolean) {
     const email = normalizeEmail(user.email);
     const description = `setList ${email} ${listNames}`;
-    if (!this._getKey()) {
+    if (!this._sendGridKey) {
       log.debug(`sendgrid skipped: ${description}`);
       return;
     }

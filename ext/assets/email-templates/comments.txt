@@ -1,45 +1,26 @@
-# FROM: {{#equals (length authorNames) 1}}{{authorNames.[0]}} (via Grist){{else}}Grist{{/equals}}
-# SUBJECT: New comments in {{docName}}
-
-New comments in [{{docName}}]({{docUrl}})
+***************************
+New comments in {{{docName}}}
+***************************
 
 {{#greaterThan (length comments) 1}}
-  {{length comments}} new comments from
-      {{~#equals (length authorNames) 1~}}
-        {{authorNames.[0]}}
-      {{~else~}}
-        {{~#equals (length authorNames) 2~}}
-          {{authorNames.[0]}} and {{authorNames.[1]}}
-        {{~else~}}
-          {{~#equals (length authorNames) 3~}}
-            {{authorNames.[0]}}, {{authorNames.[1]}}, and {{authorNames.[2]}}
-          {{~else~}}
-            {{authorNames.[0]}}, {{authorNames.[1]}}, and {{numAuthorsMinus2}} others
-          {{~/equals~}}
-        {{~/equals~}}
-      {{~/equals~}}.
+
+{{length comments}} new comments from {{#equals (length authorNames) 1~}} {{authorNames.[0]}} {{~else~}} {{~#equals (length authorNames) 2~}} {{authorNames.[0]}} and {{authorNames.[1]}} {{~else~}} {{~#equals (length authorNames) 3~}} {{authorNames.[0]}}, {{authorNames.[1]}}, and {{authorNames.[2]}} {{~else~}} {{authorNames.[0]}}, {{authorNames.[1]}}, and {{numAuthorsMinus2}} others {{~/equals~}} {{~/equals~}} {{~/equals~}}.
+
 {{/greaterThan}}
 
 {{#each comments}}
-  - {{~#if this.hasMention~}}
-      {{this.author.name}} mentioned you
-    {{~else~}}
-      {{this.author.name}} commented
-    {{~/if~}}.
+{{~#if this.hasMention~}} *{{{this.author.name}}}* mentioned you {{~else~}} *{{{this.author.name}}}* commented {{~/if~}}:
 
-    {{this.text}}
+{{{this.text}}}
 
-    [Open comment]({{{../docUrl}}}#{{{this.anchorLink}}})
+VIEW ( {{docUrl}}#{{this.anchorLink}} )
+
 {{/each}}
 
-[Open document]({{docUrl}})
+-----------
+{{{docName}}}
+-----------
 
-{{#if unsubscribeUrl }}
-  {{#if hasMentions}}
-  You received this email because you are a participant, or were mentioned in a discussion in {{docName}}.
-  [Unsubscribe from this document.]({{unsubscribeFullyUrl}})
-  {{else}}
-  You received this email because you subscribed to notifications of comments in {{docName}}.
-  [Unsubscribe from this document.]({{unsubscribeUrl}})
-  {{/if}}
-{{/if}}
+OPEN DOCUMENT ( {{docUrl}} )
+
+{{#if unsubscribeUrl }} {{#if hasMentions}} You received this email because you are a participant, or were mentioned in a discussion in {{docName}}. Unsubscribe from this document ( {{{unsubscribeFullyUrl}}} ). {{else}} You received this email because you subscribed to notifications of comments in {{docName}}. Unsubscribe from this document. ( {{{unsubscribeUrl}}} ) {{/if}} {{/if}} © 2025 Grist Labs.
