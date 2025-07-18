@@ -38,7 +38,7 @@ import { INotifier } from 'app/server/lib/INotifier';
 import { expressWrap } from 'app/server/lib/expressWrap';
 import { docEmailsQueue, GristBullMQJobs, GristJob } from 'app/server/lib/GristJobs';
 import { GristServer } from 'app/server/lib/GristServer';
-import * as log from 'app/server/lib/log';
+import log from 'app/server/lib/log';
 import { getDocScope } from 'app/server/lib/requestUtils';
 import express from 'express';
 import { createCheckers } from "ts-interface-checker";

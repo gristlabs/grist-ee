@@ -20,7 +20,7 @@
  */
 
 import {GristBullMQJobs, GristBullMQQueueScope, GristJob} from 'app/server/lib/GristJobs';
-import * as log from 'app/server/lib/log';
+import log from 'app/server/lib/log';
 import {Job as BullMQJob} from 'bullmq';
 import {Redis} from 'ioredis';
 
