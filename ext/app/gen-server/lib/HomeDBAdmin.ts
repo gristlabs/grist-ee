@@ -21,7 +21,7 @@ import { Doom } from 'app/gen-server/lib/Doom';
 import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { scrubUserFromBillingAccounts, scrubUserFromOrg } from "app/gen-server/lib/scrubUserFromOrg";
 import { GristServer } from 'app/server/lib/GristServer';
-import { SelectQueryBuilder } from "typeorm";
+import { EntityManager, SelectQueryBuilder } from "typeorm";
 import pick = require('lodash/pick');
 
 // Postgres returns BigInts for counts, which we receive as strings. This type helps remember
@@ -226,55 +226,58 @@ export class HomeDBAdmin implements AdminControlsAPI {
     options: {orgid?: number, wsid?: number, docid?: string, userid?: number}
   ): Promise<IDocRecords> {
     const {orgid, wsid, docid, userid} = options;
-    const result = await this._homeDb.connection.createQueryBuilder()
-      .select('docs')
-      .from(Document, 'docs')
-      .leftJoin('docs.aclRules', 'acl_rules')
-      .leftJoinAndSelect('docs.workspace', 'workspace')
-      .leftJoinAndSelect('workspace.org', 'org')
-      .leftJoin('org.owner', 'owner')
-      .addSelect('MAX(owner.name)', 'ownerName')
-      .chain(qb => this._addResourceAccessInfo(qb, userid, 'org'))
-      .chain(qb => {
-        if (isSet(orgid)) { qb = qb.andWhere('workspace.org_id = :orgid', {orgid}); }
-        if (isSet(wsid)) { qb = qb.andWhere('docs.workspace_id = :wsid', {wsid}); }
-        if (isSet(docid)) { qb = qb.andWhere('docs.id = :docid', {docid}); }
-        return qb;
-      })
-      .andWhere('docs.trunkId IS NULL')     // Exclude forks.
-      .groupBy('docs.id, workspace.id, org.id')
-      .getRawAndEntities();
 
-    type Result = ResourceQueryResults & { ownerName: string};
-    const rawResultsMap = new Map<string, Result>(result.raw.map(r => [r.docs_id, r]));
-    const records = result.entities.map((doc: Document) => {
-      const id = doc.id;
-      const raw = rawResultsMap.get(id);
-      // Doc is considered removed if either itself or its containing workspace is removed.
-      const removedAt = doc.removedAt || doc.workspace.removedAt;
-      const fields: IDocFields = {
-        ...pick(doc, 'name', 'isPinned', 'urlId', 'createdBy', 'type'),
-        name: doc.name,
-        createdAtMs: doc.createdAt.getTime(),
-        updatedAtMs: doc.updatedAt.getTime(),
-        ...(removedAt ? {removedAtMs: removedAt.getTime()} : {}),
-        ...(doc.usage ? {
-          usageRows: doc.usage.rowCount?.total,
-          usageDataBytes: doc.usage.dataSizeBytes,
-          usageAttachmentBytes: doc.usage.attachmentsSizeBytes,
-        } : {}),
-        workspaceId: doc.workspace.id,
-        workspaceName: doc.workspace.name,
-        orgId: doc.workspace.org.id,
-        orgName: raw?.ownerName ? `@${raw.ownerName}` : doc.workspace.org.name,
-        orgDomain: doc.workspace.org.domain,
-        orgIsPersonal: Boolean(doc.workspace.org.ownerId),
-        orgOwnerId: doc.workspace.org.ownerId,
-        ...this._extractResourceAccessInfo(raw)
-      };
-      return {id, fields};
+    return await this.withDisableMaterialization(async (manager) => {
+      const result = await manager.createQueryBuilder()
+        .select('docs')
+        .from(Document, 'docs')
+        .leftJoin('docs.aclRules', 'acl_rules')
+        .leftJoinAndSelect('docs.workspace', 'workspace')
+        .leftJoinAndSelect('workspace.org', 'org')
+        .leftJoin('org.owner', 'owner')
+        .addSelect('MAX(owner.name)', 'ownerName')
+        .chain(qb => this._addResourceAccessInfo(qb, userid, 'org'))
+        .chain(qb => {
+          if (isSet(orgid)) { qb = qb.andWhere('workspace.org_id = :orgid', {orgid}); }
+          if (isSet(wsid)) { qb = qb.andWhere('docs.workspace_id = :wsid', {wsid}); }
+          if (isSet(docid)) { qb = qb.andWhere('docs.id = :docid', {docid}); }
+          return qb;
+        })
+        .andWhere('docs.trunkId IS NULL')     // Exclude forks.
+        .groupBy('docs.id, workspace.id, org.id')
+        .getRawAndEntities();
+
+      type Result = ResourceQueryResults & { ownerName: string};
+      const rawResultsMap = new Map<string, Result>(result.raw.map(r => [r.docs_id, r]));
+      const records = result.entities.map((doc: Document) => {
+        const id = doc.id;
+        const raw = rawResultsMap.get(id);
+        // Doc is considered removed if either itself or its containing workspace is removed.
+        const removedAt = doc.removedAt || doc.workspace.removedAt;
+        const fields: IDocFields = {
+          ...pick(doc, 'name', 'isPinned', 'urlId', 'createdBy', 'type'),
+          name: doc.name,
+          createdAtMs: doc.createdAt.getTime(),
+          updatedAtMs: doc.updatedAt.getTime(),
+          ...(removedAt ? {removedAtMs: removedAt.getTime()} : {}),
+          ...(doc.usage ? {
+            usageRows: doc.usage.rowCount?.total,
+            usageDataBytes: doc.usage.dataSizeBytes,
+            usageAttachmentBytes: doc.usage.attachmentsSizeBytes,
+          } : {}),
+          workspaceId: doc.workspace.id,
+          workspaceName: doc.workspace.name,
+          orgId: doc.workspace.org.id,
+          orgName: raw?.ownerName ? `@${raw.ownerName}` : doc.workspace.org.name,
+          orgDomain: doc.workspace.org.domain,
+          orgIsPersonal: Boolean(doc.workspace.org.ownerId),
+          orgOwnerId: doc.workspace.org.ownerId,
+          ...this._extractResourceAccessInfo(raw)
+        };
+        return {id, fields};
+      });
+      return {records};
     });
-    return {records};
   }
 
   public async adminGetResourceAccess(
@@ -350,6 +353,23 @@ export class HomeDBAdmin implements AdminControlsAPI {
     await doom.deleteUser(userId);
 
     return deletedUserInfo;
+  }
+
+  // Runs the callback in an isolated runner, with enable_material=off, since turning if off can
+  // make a huge difference (e.g. from 28s to 0.5s).
+  protected async withDisableMaterialization<T>(callback: (manager: EntityManager) => Promise<T>): Promise<T> {
+    if ( this._homeDb.connection.driver.options.type === 'postgres') {
+      const queryRunner = this._homeDb.connection.createQueryRunner();
+      await queryRunner.connect(); // Get an isolated connection
+      try {
+        await queryRunner.query("SET enable_material = off");
+        return callback(queryRunner.manager);
+      } finally {
+        await queryRunner.release();
+      }
+    } else {
+      return callback(this._homeDb.connection.manager);
+    }
   }
 
   // Expects a query that includes `acl_rules`. It is very specific to the particular
