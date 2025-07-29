@@ -154,6 +154,7 @@ export const AddTableColumnParams = t.iface([], {
 });
 
 export const BaseUpdateColumnOptions = t.iface(["BaseAddColumnOptions"], {
+  "id": t.opt("string"),
   "formula_recalc_behavior": t.opt(t.union(t.lit("add-record"), t.lit("add-or-update-record"), t.lit("custom"), t.lit("never"))),
   "formula_recalc_col_ids": t.opt(t.array("string")),
 });
@@ -225,13 +226,18 @@ export const GetPageWidgetsParams = t.iface([], {
 
 export const BaseAddWidgetOptions = t.iface([], {
   "table_id": t.union("string", "null"),
+  "group_by_column_ids": t.opt(t.tuple("string", t.rest(t.array("string")))),
 });
 
 export const AddTableWidgetOptions = t.intersection("UpdateTableWidgetOptions", "BaseAddWidgetOptions");
 
+export const AddCardWidgetOptions = t.intersection("UpdateCardWidgetOptions", "BaseAddWidgetOptions");
+
+export const AddCardListWidgetOptions = t.intersection("UpdateCardListWidgetOptions", "BaseAddWidgetOptions");
+
 export const AddCustomWidgetOptions = t.intersection("UpdateCustomWidgetOptions", "BaseAddWidgetOptions");
 
-export const AddWidgetOptions = t.union("AddTableWidgetOptions", "AddCustomWidgetOptions");
+export const AddWidgetOptions = t.union("AddTableWidgetOptions", "AddCardWidgetOptions", "AddCardListWidgetOptions", "AddCustomWidgetOptions");
 
 export const AddPageWidgetParams = t.iface([], {
   "page_id": t.union("number", "null"),
@@ -245,6 +251,14 @@ export const BaseUpdateWidgetOptions = t.iface([], {
 
 export const UpdateTableWidgetOptions = t.iface(["BaseUpdateWidgetOptions"], {
   "type": t.lit("table"),
+});
+
+export const UpdateCardWidgetOptions = t.iface(["BaseUpdateWidgetOptions"], {
+  "type": t.lit("card"),
+});
+
+export const UpdateCardListWidgetOptions = t.iface(["BaseUpdateWidgetOptions"], {
+  "type": t.lit("card_list"),
 });
 
 export const BaseUpdateCustomWidgetOptions = t.iface(["BaseUpdateWidgetOptions"], {
@@ -261,7 +275,7 @@ export const UpdateRepositoryCustomWidgetOptions = t.iface(["BaseUpdateCustomWid
 
 export const UpdateCustomWidgetOptions = t.union("UpdateURLCustomWidgetOptions", "UpdateRepositoryCustomWidgetOptions");
 
-export const UpdateWidgetOptions = t.union("UpdateTableWidgetOptions", "UpdateCustomWidgetOptions");
+export const UpdateWidgetOptions = t.union("UpdateTableWidgetOptions", "UpdateCardWidgetOptions", "UpdateCardListWidgetOptions", "UpdateCustomWidgetOptions");
 
 export const UpdatePageWidgetParams = t.iface([], {
   "widget_id": "number",
@@ -270,6 +284,21 @@ export const UpdatePageWidgetParams = t.iface([], {
 
 export const RemovePageWidgetParams = t.iface([], {
   "widget_id": "number",
+});
+
+export const GetPageWidgetSelectByOptionsParams = t.iface([], {
+  "widget_id": "number",
+});
+
+export const WidgetSelectBy = t.iface([], {
+  "link_from_widget_id": "number",
+  "link_from_column_id": t.union("string", "null"),
+  "link_to_column_id": t.union("string", "null"),
+});
+
+export const SetPageWidgetSelectByParams = t.iface([], {
+  "widget_id": "number",
+  "widget_select_by": t.union("WidgetSelectBy", "null"),
 });
 
 export const QueryDocumentParams = t.iface([], {
@@ -364,11 +393,15 @@ const exportedTypeSuite: t.ITypeSuite = {
   GetPageWidgetsParams,
   BaseAddWidgetOptions,
   AddTableWidgetOptions,
+  AddCardWidgetOptions,
+  AddCardListWidgetOptions,
   AddCustomWidgetOptions,
   AddWidgetOptions,
   AddPageWidgetParams,
   BaseUpdateWidgetOptions,
   UpdateTableWidgetOptions,
+  UpdateCardWidgetOptions,
+  UpdateCardListWidgetOptions,
   BaseUpdateCustomWidgetOptions,
   UpdateURLCustomWidgetOptions,
   UpdateRepositoryCustomWidgetOptions,
@@ -376,6 +409,9 @@ const exportedTypeSuite: t.ITypeSuite = {
   UpdateWidgetOptions,
   UpdatePageWidgetParams,
   RemovePageWidgetParams,
+  GetPageWidgetSelectByOptionsParams,
+  WidgetSelectBy,
+  SetPageWidgetSelectByParams,
   QueryDocumentParams,
   Record,
   GristObjCode,

@@ -25,6 +25,12 @@ import {
   TableOperationsPlatform,
 } from "app/plugin/TableOperationsImpl";
 import {
+  getDocDataOrThrow,
+  getTableById,
+  getWidgetById,
+  getWidgetsByPageId,
+} from "app/server/lib/ActiveDocUtils";
+import {
   getProviderFromHostname,
   getUserHash,
   NonRetryableError,
@@ -51,10 +57,13 @@ import {
   AddPageWidgetParamsChecker,
   AddRecordsParams,
   AddRecordsParamsChecker,
+  AddTableColumnOptions,
   AddTableColumnParams,
   AddTableColumnParamsChecker,
   AddTableParams,
   AddTableParamsChecker,
+  GetPageWidgetSelectByOptionsParams,
+  GetPageWidgetSelectByOptionsParamsChecker,
   GetPageWidgetsParams,
   GetPageWidgetsParamsChecker,
   GetTableColumnsParams,
@@ -73,16 +82,20 @@ import {
   RemoveTableParamsChecker,
   RenameTableParams,
   RenameTableParamsChecker,
+  SetPageWidgetSelectByParams,
+  SetPageWidgetSelectByParamsChecker,
   UpdatePageParams,
   UpdatePageParamsChecker,
   UpdatePageWidgetParams,
   UpdatePageWidgetParamsChecker,
   UpdateRecordsParams,
   UpdateRecordsParamsChecker,
+  UpdateTableColumnOptions,
   UpdateTableColumnParams,
   UpdateTableColumnParamsChecker,
 } from "app/server/lib/OpenAIToolTypes";
 import { runSQLQuery } from "app/server/lib/runSQLQuery";
+import { getSelectByOptions } from "app/server/lib/selectBy";
 import { isEmpty, omit, pick } from "lodash";
 import moment from "moment";
 import fetch from "node-fetch";
@@ -103,75 +116,6 @@ interface ColInfo {
   visibleCol: number;
   untieColIdFromLabel: boolean;
   widgetOptions: string;
-}
-
-// TODO: use ts-interface-checker or Zod to generate and enforce these types.
-interface AddColumnOptions {
-  id?: string;
-  type?: string;
-  label?: string;
-  formula?: string;
-  description?: string;
-  formula_type?: "regular" | "trigger";
-  untie_col_id_from_label?: boolean;
-  text_format?: "text" | "markdown" | "hyperlink";
-  number_show_spinner?: boolean;
-  number_format?: "text" | "currency" | "decimal" | "percent" | "scientific";
-  number_currency_code?: string | null;
-  number_minus_sign?: "minus" | "parens";
-  number_min_decimals?: number;
-  number_max_decimals?: number;
-  toggle_format?: "text" | "checkbox" | "switch";
-  reference_table_id?: string;
-  date_format?:
-    | "YYYY-MM-DD"
-    | "MM-DD-YYYY"
-    | "MM/DD/YYYY"
-    | "MM-DD-YY"
-    | "MM/DD/YY"
-    | "DD MMM YYYY"
-    | "MMMM Do, YYYY"
-    | "DD-MM-YYYY"
-    | "custom";
-  date_custom_format?: string;
-  time_format?:
-    | "h:mma"
-    | "h:mma z"
-    | "HH:mm"
-    | "HH:mm z"
-    | "HH:mm:ss"
-    | "HH:mm:ss z"
-    | "custom";
-  time_custom_format?: string;
-  timezone?: string;
-  attachment_height?: number;
-  choices?: string[];
-  choice_styles?: Record<string, any>;
-  cell_text_color?: string;
-  cell_fill_color?: string;
-  cell_bold?: boolean;
-  cell_underline?: boolean;
-  cell_italic?: boolean;
-  cell_strikethrough?: boolean;
-  header_text_color?: string;
-  header_fill_color?: string;
-  header_bold?: boolean;
-  header_underline?: boolean;
-  header_italic?: boolean;
-  header_strikethrough?: boolean;
-  text_alignment?: "left" | "center" | "right";
-  text_wrap?: boolean;
-  conditional_formatting_rules?: unknown[];
-}
-
-interface UpdateColumnOptions extends AddColumnOptions {
-  reference_show_column_id?: string;
-  formula_recalc_behavior?:
-    | "add-record"
-    | "add-or-update-record"
-    | "custom"
-    | "never";
-  formula_recalc_col_ids?: string[];
 }
 
 /**
@@ -809,6 +753,18 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
           ));
           break;
         }
+        case "get_page_widget_select_by_options": {
+          result = await this._getPageWidgetSelectByOptions(doc, params);
+          break;
+        }
+        case "set_page_widget_select_by": {
+          ({ result, appliedActions } = await this._setPageWidgetSelectBy(
+            docSession,
+            doc,
+            params
+          ));
+          break;
+        }
         case "get_available_custom_widgets": {
           result = await this._getAvailableCustomWidgets();
           break;
@@ -1179,20 +1135,18 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
   private _getPageWidgets(doc: AssistanceDoc, params: any) {
     GetPageWidgetsParamsChecker.strictCheck(params);
     const { page_id } = params as GetPageWidgetsParams;
-    const docData = getDocDataOrThrow(doc);
-    const getTableId = docData
+    const getTableId = getDocDataOrThrow(doc)
       .getMetaTable("_grist_Tables")
       .getRowPropFunc("tableId");
-    return docData
-      .getMetaTable("_grist_Views_section")
-      .filterRecords({ parentId: page_id })
-      .map(({ id, tableRef, title, description, parentKey }) => ({
+    return getWidgetsByPageId(doc, page_id).map(
+      ({ id, tableRef, title, description, parentKey }) => ({
         id,
         table_id: getTableId(tableRef),
         title,
         description,
         type: parentKeyToWidgetType[parentKey] ?? parentKey,
-      }));
+      })
+    );
   }
 
   private async _addPageWidget(
@@ -1202,12 +1156,33 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
   ) {
     AddPageWidgetParamsChecker.strictCheck(params);
     const { page_id, widget_options } = params as AddPageWidgetParams;
-    const { table_id, type, ...updateOptions } = widget_options;
+    const { table_id, group_by_column_ids, ...updateOptions } = widget_options;
     let tableRef = table_id ? tableIdToRef(doc, table_id) : 0;
+    const type =
+      widgetTypeToParentKey[widget_options.type] ?? widget_options.type;
+    let groupByColRefs: number[] | null = null;
+    if (group_by_column_ids) {
+      if (tableRef === 0) {
+        throw new Error(
+          "table_id cannot be null if group_by_column_ids is set"
+        );
+      }
+
+      groupByColRefs = colIdsToRefs(doc, tableRef, ...group_by_column_ids);
+    }
     const appliedActions: ApplyUAResult[] = [];
     const createViewSectionResult = await doc.applyUserActions(
       docSession,
-      [["CreateViewSection", tableRef, page_id ?? 0, type, null, table_id]],
+      [
+        [
+          "CreateViewSection",
+          tableRef,
+          page_id ?? 0,
+          type,
+          groupByColRefs,
+          table_id,
+        ],
+      ],
       {
         desc: "Called by OpenAIAssistantV2 (tool: add_page_widget)",
       }
@@ -1246,7 +1221,7 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
   ) {
     this._checkUpdatePageWidgetParams(doc, params);
     const { widget_id, widget_options } = params;
-    const { parentKey, options: pageWidgetOptions } = this._getPageWidget(
+    const { parentKey, options: pageWidgetOptions } = getWidgetById(
       doc,
       widget_id
     );
@@ -1327,7 +1302,7 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
       return;
     }
 
-    const { parentKey } = this._getPageWidget(doc, params.widget_id);
+    const { parentKey } = getWidgetById(doc, params.widget_id);
     const paramsWithType = {
       ...params,
       widget_options: {
@@ -1336,17 +1311,6 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
       },
     };
     UpdatePageWidgetParamsChecker.strictCheck(paramsWithType);
-  }
-
-  private _getPageWidget(doc: AssistanceDoc, widgetId: number) {
-    const widget = getDocDataOrThrow(doc)
-      .getMetaTable("_grist_Views_section")
-      .getRecord(widgetId);
-    if (!widget) {
-      throw new Error(`Widget ${widgetId} not found`);
-    }
-
-    return widget;
   }
 
   private async _removePageWidget(
@@ -1388,6 +1352,70 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
         ),
       ];
     }
+    return {
+      result: null,
+      appliedActions,
+    };
+  }
+
+  private async _getPageWidgetSelectByOptions(doc: AssistanceDoc, params: any) {
+    GetPageWidgetSelectByOptionsParamsChecker.strictCheck(params);
+    const { widget_id } = params as GetPageWidgetSelectByOptionsParams;
+    return getSelectByOptions(doc, widget_id);
+  }
+
+  private async _setPageWidgetSelectBy(
+    docSession: OptDocSession,
+    doc: AssistanceDoc,
+    params: any
+  ) {
+    SetPageWidgetSelectByParamsChecker.strictCheck(params);
+    const { widget_id, widget_select_by } =
+      params as SetPageWidgetSelectByParams;
+    const widget = getWidgetById(doc, widget_id);
+    const linkSrcSectionRef = widget_select_by?.link_from_widget_id ?? 0;
+    let linkSrcColRef = 0;
+    let linkTargetColRef = 0;
+    if (linkSrcSectionRef) {
+      if (widget_select_by?.link_from_column_id) {
+        const sourceWidget = getWidgetById(doc, linkSrcSectionRef);
+        const table = getTableById(doc, sourceWidget.tableRef);
+        linkSrcColRef = colIdsToRefs(
+          doc,
+          table.id,
+          widget_select_by.link_from_column_id
+        )?.[0];
+      }
+
+      if (widget_select_by?.link_to_column_id) {
+        const table = getTableById(doc, widget.tableRef);
+        linkTargetColRef = colIdsToRefs(
+          doc,
+          table.id,
+          widget_select_by.link_to_column_id
+        )?.[0];
+      }
+    }
+    const appliedActions = [
+      await doc.applyUserActions(
+        docSession,
+        [
+          [
+            "UpdateRecord",
+            "_grist_Views_section",
+            widget_id,
+            {
+              linkSrcSectionRef,
+              linkSrcColRef,
+              linkTargetColRef,
+            },
+          ],
+        ],
+        {
+          desc: "Called by OpenAIAssistantV2 (tool: set_page_widget_select_by)",
+        }
+      ),
+    ];
     return {
       result: null,
       appliedActions,
@@ -1614,7 +1642,7 @@ async function getView(doc: AssistanceDoc, viewId: number) {
 function buildColInfo(
   doc: AssistanceDoc,
   column: RecordWithStringId | null,
-  options: AddColumnOptions | UpdateColumnOptions
+  options: AddTableColumnOptions | UpdateTableColumnOptions
 ): Partial<ColInfo> {
   const colInfo: Partial<ColInfo> = pick(
     options,
@@ -1624,13 +1652,17 @@ function buildColInfo(
     "description"
   );
 
-  if (options.id) {
+  if ("id" in options && options.id) {
     colInfo.colId = options.id;
   }
 
   if (colInfo.type === "DateTime") {
-    const defaultTimezone = getDocDataOrThrow(doc).docInfo().timezone ?? "UTC";
-    colInfo.type += `:${options.timezone ?? defaultTimezone}`;
+    if ("timezone" in options && options.timezone !== undefined) {
+      colInfo.type += `:${options.timezone}`;
+    } else {
+      const defaultTimezone = getDocDataOrThrow(doc).docInfo().timezone ?? "UTC";
+      colInfo.type += `:${defaultTimezone}`;
+    }
   }
 
   const originalType = column?.fields["type"] as string | undefined;
@@ -1638,7 +1670,10 @@ function buildColInfo(
     originalType && originalType.startsWith("Ref")
       ? getReferencedTableId(originalType)
       : null;
-  const refTableId = options.reference_table_id ?? originalRefTableId;
+  const refTableId =
+    "reference_table_id" in options && options.reference_table_id
+      ? options.reference_table_id
+      : originalRefTableId;
   if (colInfo.type?.startsWith("Ref")) {
     if (!refTableId) {
       throw new Error("reference_table_id parameter is required");
@@ -1648,6 +1683,7 @@ function buildColInfo(
   } else if (
     colInfo.type === undefined &&
     originalRefTableId &&
+    "reference_table_id" in options &&
     options.reference_table_id
   ) {
     colInfo.type = `${originalRefTableId}:${options.reference_table_id}`;
@@ -1725,7 +1761,7 @@ function buildColInfo(
   );
   const widgetOptions: any = {};
 
-  if (options.text_format !== undefined) {
+  if ("text_format" in options && options.text_format !== undefined) {
     switch (options.text_format) {
       case "text": {
         widgetOptions.widget = "TextBox";
@@ -1745,14 +1781,17 @@ function buildColInfo(
     }
   }
 
-  if (options.number_show_spinner !== undefined) {
+  if (
+    "number_show_spinner" in options &&
+    options.number_show_spinner !== undefined
+  ) {
     if (options.number_show_spinner) {
       widgetOptions.widget = "Spinner";
     } else {
       widgetOptions.widget = "TextBox";
     }
   }
-  if (options.number_format !== undefined) {
+  if ("number_format" in options && options.number_format !== undefined) {
     switch (options.number_format) {
       case "currency":
       case "decimal":
@@ -1770,10 +1809,16 @@ function buildColInfo(
       }
     }
   }
-  if (options.number_currency_code !== undefined) {
+  if (
+    "number_currency_code" in options &&
+    options.number_currency_code !== undefined
+  ) {
     widgetOptions.currency = options.number_currency_code;
   }
-  if (options.number_minus_sign !== undefined) {
+  if (
+    "number_minus_sign" in options &&
+    options.number_minus_sign !== undefined
+  ) {
     switch (options.number_minus_sign) {
       case "minus": {
         widgetOptions.numSign = null;
@@ -1790,14 +1835,20 @@ function buildColInfo(
       }
     }
   }
-  if (options.number_min_decimals !== undefined) {
+  if (
+    "number_min_decimals" in options &&
+    options.number_min_decimals !== undefined
+  ) {
     widgetOptions.decimals = options.number_min_decimals;
   }
-  if (options.number_max_decimals !== undefined) {
+  if (
+    "number_max_decimals" in options &&
+    options.number_max_decimals !== undefined
+  ) {
     widgetOptions.maxDecimals = options.number_max_decimals;
   }
 
-  if (options.toggle_format !== undefined) {
+  if ("toggle_format" in options && options.toggle_format !== undefined) {
     switch (options.toggle_format) {
       case "text": {
         widgetOptions.widget = "TextBox";
@@ -1817,7 +1868,7 @@ function buildColInfo(
     }
   }
 
-  if (options.date_format !== undefined) {
+  if ("date_format" in options && options.date_format !== undefined) {
     if (options.date_format === "custom") {
       if (!options.date_custom_format) {
         throw new Error(
@@ -1832,7 +1883,7 @@ function buildColInfo(
       widgetOptions.isCustomDateFormat = false;
     }
   }
-  if (options.time_format !== undefined) {
+  if ("time_format" in options && options.time_format !== undefined) {
     if (options.time_format === "custom") {
       if (!options.time_custom_format) {
         throw new Error(
@@ -1848,21 +1899,24 @@ function buildColInfo(
     }
   }
 
-  if (options.attachment_height !== undefined) {
+  if (
+    "attachment_height" in options &&
+    options.attachment_height !== undefined
+  ) {
     widgetOptions.height = options.attachment_height;
   }
 
-  if (options.text_alignment !== undefined) {
+  if ("text_alignment" in options && options.text_alignment !== undefined) {
     widgetOptions.alignment = options.text_alignment;
   }
-  if (options.text_wrap !== undefined) {
+  if ("text_wrap" in options && options.text_wrap !== undefined) {
     widgetOptions.wrap = options.text_wrap;
   }
 
-  if (options.choices !== undefined) {
+  if ("choices" in options && options.choices !== undefined) {
     widgetOptions.choices = options.choices;
   }
-  if (options.choice_styles !== undefined) {
+  if ("choice_styles" in options && options.choice_styles !== undefined) {
     widgetOptions.choiceOptions = options.choice_styles;
   }
 
@@ -1989,13 +2043,4 @@ function colIdsToRefs(
     .filter((r) => colIdsSet.has(r.colId))
     .map((r) => r.id);
   return colRefs;
-}
-
-function getDocDataOrThrow(doc: AssistanceDoc) {
-  const docData = doc.docData;
-  if (!docData) {
-    throw new Error("Document not ready");
-  }
-
-  return docData;
 }

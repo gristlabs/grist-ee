@@ -842,10 +842,18 @@ export const OPENAI_TOOLS: OpenAITool[] = [
               },
               type: {
                 type: "string",
-                enum: ["table", "custom"],
+                enum: ["table", "card", "card_list", "custom"],
                 description:
                   "The widget type. " +
-                  "The following types are not yet supported: 'card', 'card_list', 'chart', 'form'.",
+                  "The following types are not yet supported: 'chart', 'form'.",
+              },
+              group_by_column_ids: {
+                type: ["array"],
+                description:
+                  "If table_id is not null, the IDs of the columns to group records by.",
+                items: {
+                  type: ["string"],
+                },
               },
               custom_widget_id: {
                 type: "string",
@@ -898,10 +906,10 @@ export const OPENAI_TOOLS: OpenAITool[] = [
             properties: {
               type: {
                 type: "string",
-                enum: ["table", "custom"],
+                enum: ["table", "card", "card_list", "custom"],
                 description:
                   "The widget type. " +
-                  "The following types are not yet supported: 'card', 'card_list', 'chart', 'form'.",
+                  "The following types are not yet supported: 'chart', 'form'.",
               },
               custom_widget_id: {
                 type: "string",
@@ -948,6 +956,81 @@ export const OPENAI_TOOLS: OpenAITool[] = [
           },
         },
         required: ["widget_id"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_page_widget_select_by_options",
+      description:
+        "Returns all other widgets on the same page that can be linked to this widget. " +
+        "When linked, selecting a record in the other widget will cause this widget to " +
+        "update and show only the data related to the selected record.",
+      parameters: {
+        type: "object",
+        properties: {
+          widget_id: {
+            type: "integer",
+            description: "The ID of the widget.",
+          },
+        },
+        required: ["widget_id"],
+        additionalProperties: false,
+      },
+      strict: true,
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_page_widget_select_by",
+      description:
+        "Links this widget to another widget in the same page. " +
+        "When linked, selecting a record in the other widget will cause this widget to " +
+        "update and show only the data related to the selected record.",
+      parameters: {
+        type: "object",
+        properties: {
+          widget_id: {
+            type: "integer",
+            description: "The ID of the widget to link.",
+          },
+          widget_select_by: {
+            type: ["object", "null"],
+            description:
+              "The options to link this widget with. " +
+              "Must be one of the options returned by get_page_widget_select_by_options. " +
+              "If null, this widget will be unlinked. ",
+            properties: {
+              link_from_widget_id: {
+                type: "integer",
+                description: "The widget to link this widget to.",
+              },
+              link_from_column_id: {
+                type: ["string", "null"],
+                description:
+                  "The column in link_from_widget_id to use for matching records in the linked widget. " +
+                  "If null, records will be matched by row ID - useful for linking 2 widgets for the same table.",
+              },
+              link_to_column_id: {
+                type: ["string", "null"],
+                description:
+                  "The column in link_to_widget_id to use for matching records from link_from_widget_id. " +
+                  "If null, all rows matching link_from_column_id will be shown in the linked widget.",
+              },
+            },
+            required: [
+              "link_from_widget_id",
+              "link_from_column_id",
+              "link_to_column_id",
+            ],
+            additionalProperties: false,
+          },
+        },
+        required: ["widget_id", "widget_select_by"],
         additionalProperties: false,
       },
       strict: true,

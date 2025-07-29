@@ -157,7 +157,7 @@ interface AddAttachmentsColumnOptions extends BaseAddColumnOptions {
   attachment_height?: number;
 }
 
-type AddTableColumnOptions =
+export type AddTableColumnOptions =
   | AddAnyColumnOptions
   | AddTextColumnOptions
   | AddNumericColumnOptions
@@ -178,6 +178,7 @@ export interface AddTableColumnParams {
 }
 
 interface BaseUpdateColumnOptions extends BaseAddColumnOptions {
+  id?: string;
   formula_recalc_behavior?:
     | "add-record"
     | "add-or-update-record"
@@ -226,7 +227,7 @@ interface UpdateRefListColumnOptions extends UpdateRefOrRefListColumnOptions {
 type UpdateAttachmentsColumnOptions = AddAttachmentsColumnOptions &
   BaseUpdateColumnOptions;
 
-type UpdateTableColumnOptions =
+export type UpdateTableColumnOptions =
   | UpdateAnyColumnOptions
   | UpdateTextColumnOptions
   | UpdateNumericColumnOptions
@@ -270,13 +271,23 @@ export interface GetPageWidgetsParams {
 
 interface BaseAddWidgetOptions {
   table_id: string | null;
+  group_by_column_ids?: [string, ...string[]];
 }
 
 type AddTableWidgetOptions = UpdateTableWidgetOptions & BaseAddWidgetOptions;
 
+type AddCardWidgetOptions = UpdateCardWidgetOptions & BaseAddWidgetOptions;
+
+type AddCardListWidgetOptions = UpdateCardListWidgetOptions &
+  BaseAddWidgetOptions;
+
 type AddCustomWidgetOptions = UpdateCustomWidgetOptions & BaseAddWidgetOptions;
 
-type AddWidgetOptions = AddTableWidgetOptions | AddCustomWidgetOptions;
+type AddWidgetOptions =
+  | AddTableWidgetOptions
+  | AddCardWidgetOptions
+  | AddCardListWidgetOptions
+  | AddCustomWidgetOptions;
 
 export interface AddPageWidgetParams {
   page_id: number | null;
@@ -290,6 +301,14 @@ interface BaseUpdateWidgetOptions {
 
 interface UpdateTableWidgetOptions extends BaseUpdateWidgetOptions {
   type: "table";
+}
+
+interface UpdateCardWidgetOptions extends BaseUpdateWidgetOptions {
+  type: "card";
+}
+
+interface UpdateCardListWidgetOptions extends BaseUpdateWidgetOptions {
+  type: "card_list";
 }
 
 interface BaseUpdateCustomWidgetOptions extends BaseUpdateWidgetOptions {
@@ -309,7 +328,11 @@ type UpdateCustomWidgetOptions =
   | UpdateURLCustomWidgetOptions
   | UpdateRepositoryCustomWidgetOptions;
 
-type UpdateWidgetOptions = UpdateTableWidgetOptions | UpdateCustomWidgetOptions;
+type UpdateWidgetOptions =
+  | UpdateTableWidgetOptions
+  | UpdateCardWidgetOptions
+  | UpdateCardListWidgetOptions
+  | UpdateCustomWidgetOptions;
 
 export interface UpdatePageWidgetParams {
   widget_id: number;
@@ -318,6 +341,21 @@ export interface UpdatePageWidgetParams {
 
 export interface RemovePageWidgetParams {
   widget_id: number;
+}
+
+export interface GetPageWidgetSelectByOptionsParams {
+  widget_id: number;
+}
+
+interface WidgetSelectBy {
+  link_from_widget_id: number;
+  link_from_column_id: string | null;
+  link_to_column_id: string | null;
+}
+
+export interface SetPageWidgetSelectByParams {
+  widget_id: number;
+  widget_select_by: WidgetSelectBy | null;
 }
 
 export interface QueryDocumentParams {
@@ -383,6 +421,8 @@ const {
   AddPageWidgetParams,
   UpdatePageWidgetParams,
   RemovePageWidgetParams,
+  GetPageWidgetSelectByOptionsParams,
+  SetPageWidgetSelectByParams,
   QueryDocumentParams,
   AddRecordsParams,
   UpdateRecordsParams,
@@ -403,6 +443,8 @@ for (const checker of [
   AddPageWidgetParams,
   UpdatePageWidgetParams,
   RemovePageWidgetParams,
+  GetPageWidgetSelectByOptionsParams,
+  SetPageWidgetSelectByParams,
   QueryDocumentParams,
   AddRecordsParams,
   UpdateRecordsParams,
@@ -448,6 +490,12 @@ export const UpdatePageWidgetParamsChecker =
 
 export const RemovePageWidgetParamsChecker =
   RemovePageWidgetParams as CheckerT<RemovePageWidgetParams>;
+
+export const GetPageWidgetSelectByOptionsParamsChecker =
+  GetPageWidgetSelectByOptionsParams as CheckerT<GetPageWidgetSelectByOptionsParams>;
+
+export const SetPageWidgetSelectByParamsChecker =
+  SetPageWidgetSelectByParams as CheckerT<SetPageWidgetSelectByParams>;
 
 export const QueryDocumentParamsChecker =
   QueryDocumentParams as CheckerT<QueryDocumentParams>;
