@@ -21,15 +21,15 @@
  * - Check that form submissions do produce notifications.
  */
 import { ApiError } from 'app/common/ApiError';
-import { FullDocPrefs } from 'app/common/Prefs';
+import { DocPrefs, FullDocPrefs } from 'app/common/Prefs';
 import { FullUser, UserAccessData } from 'app/common/UserAPI';
 import { getSetMapValue } from 'app/common/gutil';
 import { fillNotificationPrefs } from 'app/common/NotificationsConfigAPI';
 import { NotificationPrefs, NotificationPrefsBundle } from 'app/common/NotificationPrefs';
-import { DocPrefs } from 'app/common/Prefs';
 import NotificationPrefsTI from 'app/common/NotificationPrefs-ti';
 import { Document } from 'app/gen-server/entity/Document';
-import { DocScope, HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
+import { HomeDBCaches } from 'app/gen-server/lib/homedb/Caches';
+import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { BatchedJobs, Schedule } from 'app/server/lib/BatchedJobs';
 import { OptDocSession } from 'app/server/lib/DocSession';
 import { DocComment } from 'app/common/DocComments';
@@ -122,6 +122,7 @@ function addConfigEndpoints(homeDb: HomeDBManager, app: express.Express) {
 
 export class DocNotificationManager implements IDocNotificationManager {
   private _homeDb: HomeDBManager;
+  private _caches: HomeDBCaches;
   private _specialUserIds: Set<number>;
 
   public constructor(
@@ -129,6 +130,10 @@ export class DocNotificationManager implements IDocNotificationManager {
     private readonly _batchedJobs: BatchedJobs,
   ) {
     this._homeDb = _gristServer.getHomeDBManager();
+    if (!this._homeDb.caches) {
+      throw new Error("DocNotificationManager: requires caches to be enabled in HomeDBManager");
+    }
+    this._caches = this._homeDb.caches;
 
     // Get specialUserIds to exclude, but not the support user, who is normally a valid user.
     this._specialUserIds = new Set(this._homeDb.getSpecialUserIds());
@@ -225,22 +230,17 @@ export class DocNotificationManager implements IDocNotificationManager {
   public testFetchNotificationPrefs(docId: string) { return this._fetchNotificationPrefs(docId, true); }
 
   // Fetches all users the doc is shared with and their notification preferences.
-  // TODO This is actually too slow to do for each action because getDocAccess() is a slow call.
-  // It needs caching to allow having this info ready when we need it.
-  // XXX To be clear, this is NOT acceptable to turn on on prod, it'll overload the database.
+  // This is cached because it can be slow: this method is only used to populate _prefsCache.
   private async _fetchNotificationPrefs(docId: string, haveComments: boolean): Promise<NotificationPrefsWithUser[]> {
-    const allPrefs = await this._homeDb.getDocPrefsForUsers(docId, 'any');
+    const allPrefs = await this._caches.getDocPrefs(docId);
 
     // If no comments and no docChange subscribers (a very common situation), we don't need to
     // know who has access to the doc, since no one needs to be notified.
     if (!haveComments && !hasDocChangeSubscribers([...allPrefs.values()])) { return []; }
 
-    // NOTE! We use the special "previewer" to get a list of who the doc is shared with regardless of
-    // permissions of the caller (since even a change made by an anonymous user needs to notify
-    // appropriate subscribers).
-    const bypassScope: DocScope = {userId: this._homeDb.getPreviewerUserId(), urlId: docId};
-    const access = this._homeDb.unwrapQueryResult(
-      await this._homeDb.getDocAccess(bypassScope, {flatten: true, excludeUsersWithoutAccess: true}));
+    // NOTE! We look up doc-access without regard to the permissions of the caller (since even a
+    // change made by an anonymous user needs to notify appropriate subscribers).
+    const access = this._homeDb.unwrapQueryResult(await this._caches.getDocAccess(docId));
     const users = access.users.filter(u => !this._specialUserIds.has(u.id));
     const docDefaults = allPrefs.get(null)?.notifications || {};
     return users.map((user, i) => ({

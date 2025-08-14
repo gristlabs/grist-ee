@@ -85,7 +85,7 @@ export class AuditLogger implements IAuditLogger {
     this._pubSubUnsubscribe = pubSubManager.subscribe(channel, (message) => {
       const { orgId } = JSON.parse(message);
       this._invalidateStreamingDestinations(orgId);
-    });
+    }).unsubscribeCB;
   }
 
   public async close(timeout = 10_000) {

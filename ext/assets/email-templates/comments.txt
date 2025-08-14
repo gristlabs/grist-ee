@@ -13,7 +13,7 @@ New comments in {{{docName}}}
 
 {{{this.text}}}
 
-VIEW ( {{docUrl}}#{{this.anchorLink}} )
+VIEW ( {{../docUrl}}#{{this.anchorLink}} )
 
 {{/each}}
 

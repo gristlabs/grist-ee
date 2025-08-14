@@ -2,7 +2,7 @@ import {Banner, buildBannerMessage} from 'app/client/components/Banner';
 import {buildLimitStatusMessage, buildUpgradeMessage} from 'app/client/components/DocumentUsage';
 import {sessionStorageBoolObs} from 'app/client/lib/localStorageObs';
 import {DocPageModel} from 'app/client/models/DocPageModel';
-import {isFreePlan} from 'app/common/Features';
+import {displayPlanName, isFreePlan} from 'app/common/Features';
 import {canUpgradeOrg} from 'app/common/roles';
 import {DataLimitInfo} from 'app/common/DocUsage';
 import {Computed, Disposable, dom, DomComputed, makeTestId, Observable} from 'grainjs';
@@ -13,6 +13,11 @@ export class DocUsageBanner extends Disposable {
   private readonly _currentDocId = this._docPageModel.currentDocId;
   private readonly _currentDocUsage = this._docPageModel.currentDocUsage;
   private readonly _currentOrg = this._docPageModel.currentOrg;
+  private readonly _currentPlan = Computed.create(this, (use) => {
+    const product = use(this._docPageModel.currentProduct);
+    const planLabel = (product ? displayPlanName[product.name] : '') || 'current';
+    return planLabel;
+  });
 
   private readonly _dataLimitInfo = Computed.create(this, this._currentDocUsage, (_use, usage) => {
     return usage?.dataLimitInfo;
@@ -64,7 +69,9 @@ export class DocUsageBanner extends Disposable {
         const product = org.billingAccount?.product;
         return dom.create(Banner, {
           content: buildBannerMessage(
-            buildLimitStatusMessage({dataLimitInfo: {status: 'approachingLimit'}}, product?.features),
+            buildLimitStatusMessage(
+              this._currentPlan.get(),
+              {dataLimitInfo: {status: 'approachingLimit'}}, product?.features),
             (product && isFreePlan(product.name)
               ? [' ', buildUpgradeMessage(
                 canUpgradeOrg(org),
@@ -90,7 +97,11 @@ export class DocUsageBanner extends Disposable {
         const product = org.billingAccount?.product;
         return dom.create(Banner, {
           content: buildBannerMessage(
-            buildLimitStatusMessage({dataLimitInfo}, product?.features),
+            buildLimitStatusMessage(
+              this._currentPlan.get(),
+              {dataLimitInfo},
+              product?.features
+            ),
             (product && isFreePlan(product.name)
               ? [' ', buildUpgradeMessage(
                 canUpgrade,
@@ -108,7 +119,11 @@ export class DocUsageBanner extends Disposable {
                 'short',
                 () => this._docPageModel.appModel.showUpgradeModal()
               )
-                : buildLimitStatusMessage({dataLimitInfo}, product?.features)
+                : buildLimitStatusMessage(
+                    this._currentPlan.get(),
+                    {dataLimitInfo},
+                    product?.features
+                  )
             ),
             testId('text'),
           ),

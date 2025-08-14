@@ -98,7 +98,8 @@ export class Activation implements IBilling {
 
 
     this._pubSubUnsubscribe = _gristServer.getPubSubManager()
-      .subscribe(this._redisChannel, (message) => this._readLatest());
+      .subscribe(this._redisChannel, (message) => this._readLatest())
+      .unsubscribeCB;
   }
 
   public async close() {

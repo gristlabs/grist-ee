@@ -67,7 +67,7 @@ export class BatchedJobs {
     worker.on('completed', (job) => this._maybeReschedule(job));
     // We don't reschedule on failure: we'll add a job on next add() call, with 'firstDelay' for delay.
     worker.on('failed', (job, err) => { log.error(`BatchedJobs job ${job?.id} failed`, err); });
-    worker.on('error', (err) => { log.error("BatchdJobs error", err); });
+    worker.on('error', (err) => { log.error("BatchdJobs error", String(err)); });
   }
 
   /**

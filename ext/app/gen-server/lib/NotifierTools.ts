@@ -331,6 +331,13 @@ export class NotifierTools implements INotifierTools {
 
   public async docNotification(event: DocNotificationEvent, userId: number, templateData: object) {
     const user = await this._dbManager.getFullUser(userId);
+
+    // We are only sending doc notifications to users who logged in at least once.
+    if (!user.firstLoginAt) {
+      log.debug(`notifications: skipping docNotification for user ${userId} who has not logged in`);
+      return { label: `skipped docNotification for user ${userId}` };
+    }
+
     const personalizations = [{
       to: [this._asSendGridAddress(user)],
       dynamic_template_data: templateData

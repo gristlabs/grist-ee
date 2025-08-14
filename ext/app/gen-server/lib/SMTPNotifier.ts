@@ -77,6 +77,8 @@ export class SMTPNotifier extends NotifierBase {
         });
         log.debug('SMTPNotifier: sent notification', info);
       }
+    } else {
+      log.warn(`SMTPNotifier: no content to send for event ${eventName}, skipping email`);
     }
   }
 
