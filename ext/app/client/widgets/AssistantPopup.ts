@@ -1,6 +1,7 @@
 import * as commands from 'app/client/components/commands';
 import { GristDoc } from "app/client/components/GristDoc";
 import { ChatHistory } from "app/client/models/ChatHistory";
+import { urlState } from "app/client/models/gristUrlState";
 import { makeT } from "app/client/lib/localization";
 import {
   localStorageJsonObs,
@@ -25,7 +26,8 @@ import {
   cssAiIntroMessage,
   cssAiMessageParagraph,
 } from "app/client/widgets/FormulaAssistant";
-import { AssistanceState } from "app/common/Assistance";
+import { AssistantState } from "app/common/ActiveDocAPI";
+import { AssistanceState, DeveloperPromptVersion } from "app/common/Assistance";
 import { commonUrls } from "app/common/gristUrls";
 import { TelemetryEvent, TelemetryMetadata } from "app/common/Telemetry";
 import { getGristConfig } from "app/common/urlUtils";
@@ -47,6 +49,7 @@ export class AssistantPopup extends Disposable {
       {
         messages: [],
         conversationId: uuidv4(),
+        developerPromptVersion: this._getDeveloperPromptVersion(),
       }
     )
   );
@@ -70,7 +73,10 @@ export class AssistantPopup extends Disposable {
   );
   private _popupHolder = Holder.create<FloatingPopup>(this);
 
-  constructor(private _gristDoc: GristDoc) {
+  constructor(
+    private _gristDoc: GristDoc,
+    private _options: { state?: AssistantState } = {}
+  ) {
     super();
     this._assistant = Assistant.create(this, {
       history: this._history,
@@ -80,7 +86,11 @@ export class AssistantPopup extends Disposable {
       buildIntroMessage,
     });
     this._showPopup();
-    this._logTelemetryEvent("assistantOpen", true);
+    this._logTelemetryEvent("assistantOpen");
+    if (this._options.state) {
+      const { prompt } = this._options.state;
+      this._assistant.send(prompt).catch(reportError);
+    }
   }
 
   private _showPopup() {
@@ -147,13 +157,13 @@ export class AssistantPopup extends Disposable {
     return await askAI(this._gristDoc, {
       description: message,
       conversationId: this._assistant.conversationId,
+      developerPromptVersion: this._assistant.developerPromptVersion,
       state: this._history.get().state,
     });
   }
 
   private _logTelemetryEvent(
     event: TelemetryEvent,
-    includeContext = false,
     metadata: TelemetryMetadata = {}
   ) {
     logTelemetryEvent(event, {
@@ -161,16 +171,20 @@ export class AssistantPopup extends Disposable {
         version: 2,
         docIdDigest: this._gristDoc.docId(),
         conversationId: this._assistant.conversationId,
-        ...(!includeContext
-          ? {}
-          : {
-              context: {
-                viewId: this._gristDoc.activeViewId.get(),
-              },
-            }),
+        context: {
+          viewId: this._gristDoc.activeViewId.get(),
+        },
         ...metadata,
       },
     });
+  }
+
+  private _getDeveloperPromptVersion(): DeveloperPromptVersion {
+    if (this._options.state) {
+      return "new-document";
+    } else {
+      return "default";
+    }
   }
 }
 
@@ -187,15 +201,14 @@ export function buildOpenAssistantButton(
     cssPageLink(
       cssPageIcon("Robot"),
       cssLinkText(t("Assistant")),
-      cssLinkTextAccent(
-        t("New"),
-        gristDoc.behavioralPromptsManager.attachPopup("newAssistant", {
-          popupOptions: {
-            placement: "right-start",
-          },
-        })
-      ),
+      cssLinkTextAccent(t("New")),
       dom.on("click", () => commands.allCommands.activateAssistant.run()),
+      gristDoc.behavioralPromptsManager.attachPopup("newAssistant", {
+        isDisabled: () => !!urlState().state.get().params?.assistantState,
+        popupOptions: {
+          placement: "right-start",
+        },
+      }),
       ...args
     )
   );
@@ -206,10 +219,11 @@ async function askAI(
   options: {
     description: string;
     conversationId: string;
+    developerPromptVersion: DeveloperPromptVersion;
     state?: AssistanceState;
   }
 ) {
-  const { description, conversationId, state } = options;
+  const { description, conversationId, developerPromptVersion, state } = options;
   const viewId = grist.activeViewId.get();
   return await grist.docApi.getAssistance({
     conversationId,
@@ -217,6 +231,7 @@ async function askAI(
       viewId: typeof viewId === "number" ? viewId : undefined,
     },
     text: description,
+    developerPromptVersion,
     state,
   });
 }

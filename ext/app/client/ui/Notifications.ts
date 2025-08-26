@@ -5,15 +5,18 @@ import {makeT} from 'app/client/lib/localization';
 import {DocInfo} from 'app/client/models/DocPageModel';
 import {AdminSection, AdminSectionItem} from 'app/client/ui/AdminPanelCss';
 import {cssSpinnerBox} from 'app/client/ui/AdminTogglesCss';
+import {cssLink} from 'app/client/ui2018/links';
 import {select} from 'app/client/ui2018/menus';
 import {theme, vars} from 'app/client/ui2018/cssVars';
 import {loadingSpinner} from 'app/client/ui2018/loaders';
 import {toggleSwitch} from 'app/client/ui2018/toggleSwitch';
-import {DocAPI} from "app/common/UserAPI";
+import {ApiError} from 'app/common/ApiError';
+import {commonUrls} from 'app/common/gristUrls';
 import {fillNotificationPrefs, NotificationsConfigAPIImpl} from "app/common/NotificationsConfigAPI";
 import {NotificationPrefs, NotificationPrefsBundle} from "app/common/NotificationPrefs";
 import {getGristConfig} from "app/common/urlUtils";
-import {Computed, dom, DomContents, IDisposableOwner, Observable, styled} from 'grainjs';
+import {DocAPI} from 'app/common/UserAPI';
+import {Computed, dom, DomContents, IDisposableOwner, makeTestId, Observable, styled} from 'grainjs';
 import {isEnterpriseDeployment} from 'app/client/lib/enterpriseDeploymentCheck';
 import get = require('lodash/get');
 import set = require('lodash/set');
@@ -21,12 +24,18 @@ import pick = require('lodash/pick');
 import {debounce} from 'perfect-debounce';
 
 const t = makeT('Notifications');
+const testId = makeTestId('test-notifications-');
 const SAVE_DEBOUNCE_MS = 100;
 
 type CommentSetting = 'all' | 'relevant' | 'none';
 
+/**
+ * Build configuration for doc-change and comment notifications.
+ * These only work in enterprise configuration, and when a notifier is configured. We return null
+ * if either of these is false, or if notifications don't apply to this doc (e.g. a fork or a snapshot).
+ */
 export function buildNotificationsConfig(owner: IDisposableOwner, docAPI: DocAPI, doc: DocInfo|null): DomContents {
-  if (!isEnterpriseDeployment() || !getGristConfig().featureNotifications) {
+  if (!isEnterpriseDeployment() || !getGristConfig().notifierEnabled) {
     return null;
   }
 
@@ -38,6 +47,7 @@ export function buildNotificationsConfig(owner: IDisposableOwner, docAPI: DocAPI
   const api = new NotificationsConfigAPIImpl(docAPI.getBaseUrl(), docAPI.options);
   const isLoading = Observable.create(owner, true);
   const isSaving = Observable.create(owner, false);
+  const isAccessDenied = Observable.create(owner, false);
   const errorMsg = Observable.create(owner, "");
   const userConfig = Observable.create<NotificationPrefs>(owner, {});
   let fullPrefsToSave: Partial<NotificationPrefsBundle> = {};
@@ -73,7 +83,14 @@ export function buildNotificationsConfig(owner: IDisposableOwner, docAPI: DocAPI
     .then(unlessDisposed(prefs => {
       userConfig.set(pick(prefs.currentUser || {}, 'docChanges', 'comments'));
     }))
-    .catch(unlessDisposed(err => errorMsg.set(err.message)))
+    .catch(unlessDisposed(err => {
+      if (err instanceof ApiError && err.status === 403) {
+        userConfig.set({docChanges: false, comments: 'none'});
+        isAccessDenied.set(true);
+      } else {
+        errorMsg.set(err.message);
+      }
+    }))
     .finally(unlessDisposed(() => isLoading.set(false)));
 
   // Merge the default config and the user config. This is the actual value that applies to the user.
@@ -95,23 +112,45 @@ export function buildNotificationsConfig(owner: IDisposableOwner, docAPI: DocAPI
   return dom.create(AdminSection,
     [t('Notifications'), cssSaving(t('Saving...'), cssSaving.cls('-visible', isSaving))],
     [
-      dom('div', t('Choose when to get notified for changes in this document.')),
-      dom.maybe(errorMsg, (msg) => cssError(msg)),
-      dom.domComputed(isLoading, (loading) => loading ?
-        cssSpinnerBox(loadingSpinner()) :
-        [
+      dom.domComputed(use => {
+        const loading = use(isLoading);
+        if (loading) {
+          return cssSpinnerBox(loadingSpinner());
+        }
+
+        const accessDenied = use(isAccessDenied);
+        return [
+          dom('div',
+            accessDenied
+              ? t(
+                  'You have public access to this document. ' +
+                  "If you wish to receive notifications, the document's " +
+                  'owner must add you as a collaborator. {{learnMoreLink}}.',
+                  {
+                    learnMoreLink: cssLink(
+                      {href: commonUrls.helpSharing, target: '_blank'},
+                      t('Learn more about sharing')
+                    ),
+                  }
+                )
+              : t('Choose when to get notified for changes in this document.'),
+            testId('config-intro'),
+          ),
+          dom.maybe(errorMsg, (msg) => cssError(msg)),
           dom.create(AdminSectionItem, {
             id: 'notifications-doc-edits', name: t('Changes'),
             description: null,
             value: cssToggleSwitch(docEdits),
+            disabled: accessDenied ? t('Only available to document collaborators') : null,
           }),
           dom.create(AdminSectionItem, {
             id: 'notifications-comments', name: t('Comments'),
             description: null,
             value: buildComments(comments),
+            disabled: accessDenied ? t('Only available to document collaborators') : null,
           }),
-        ]
-      ),
+        ];
+      }),
     ]
   );
 }

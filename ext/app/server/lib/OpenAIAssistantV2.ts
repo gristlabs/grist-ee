@@ -40,7 +40,14 @@ import {
   TokensExceededFirstMessageError,
   TokensExceededLaterMessageError,
 } from "app/server/lib/Assistant";
+import {
+  getAssistantStatePermit,
+  setAssistantStatePermit,
+} from "app/server/lib/AssistantStatePermit";
+import { isAnonymousUser, RequestWithLogin } from "app/server/lib/Authorizer";
+import { createSavedDoc } from "app/server/lib/createSavedDoc";
 import { OptDocSession } from "app/server/lib/DocSession";
+import { expressWrap } from "app/server/lib/expressWrap";
 import { GristServer } from "app/server/lib/GristServer";
 import {
   AssistanceDoc,
@@ -94,8 +101,15 @@ import {
   UpdateTableColumnParams,
   UpdateTableColumnParamsChecker,
 } from "app/server/lib/OpenAIToolTypes";
+import {
+  getScope,
+  optStringParam,
+  stringParam,
+} from "app/server/lib/requestUtils";
 import { runSQLQuery } from "app/server/lib/runSQLQuery";
 import { getSelectByOptions } from "app/server/lib/selectBy";
+import * as cookie from "cookie";
+import * as express from "express";
 import { isEmpty, omit, pick } from "lodash";
 import moment from "moment";
 import fetch from "node-fetch";
@@ -226,6 +240,112 @@ export class OpenAIAssistantV2 implements AssistantV2 {
     return getProviderFromHostname(this._endpoint);
   }
 
+  public addEndpoints(app: express.Application) {
+    app.post(
+      "/api/assistant/start",
+      expressWrap(async (req, res) => {
+        const mreq = req as RequestWithLogin;
+        const prompt = stringParam(req.body.prompt, "prompt");
+        const srcDocId = optStringParam(req.body.srcDocId, "srcDocId");
+        this._gristServer
+          .getTelemetry()
+          .logEvent(mreq, "assistantStartDocument", {
+            full: {
+              userId: mreq.userId,
+              altSessionId: mreq.altSessionId,
+              prompt,
+            },
+          });
+        let redirectUrl: string;
+        if (isAnonymousUser(req)) {
+          redirectUrl = await this._gristServer.getSigninUrl(req, {
+            signUp: true,
+            params: {
+              assistantPrompt: prompt,
+              srcDocId,
+            },
+          });
+        } else {
+          const docId = await createSavedDoc(this._gristServer, req, {
+            srcDocId,
+          });
+          const store = this._gristServer.getPermitStore();
+          const permit = {
+            prompt,
+            docId,
+          };
+          const assistantState = await setAssistantStatePermit(store, permit);
+          const url = new URL(
+            this._gristServer.getMergedOrgUrl(mreq, `/doc/${docId}`)
+          );
+          url.searchParams.set("assistantState", assistantState);
+          redirectUrl = url.href;
+        }
+        res.json({ redirectUrl });
+      })
+    );
+  }
+
+  public async onFirstVisit(req: express.Request, res: express.Response) {
+    await this._maybeRedirectToNewDocWithPrompt(req, res);
+  }
+
+  private async _maybeRedirectToNewDocWithPrompt(
+    req: express.Request,
+    res: express.Response
+  ): Promise<void> {
+    const cookies = cookie.parse(req.headers.cookie || "");
+
+    res.clearCookie("gr_signup_state");
+
+    const stateCookie = cookies["gr_signup_state"];
+    if (!stateCookie) {
+      return;
+    }
+
+    const state = safeJsonParse(stateCookie, {});
+    const { assistantState, srcDocId } = state;
+    if (!assistantState) {
+      return;
+    }
+
+    const store = this._gristServer.getPermitStore();
+    const permit = await getAssistantStatePermit(store, assistantState);
+    if (!permit) {
+      return;
+    }
+
+    try {
+      const docId = await createSavedDoc(this._gristServer, req, {
+        srcDocId,
+      });
+      const newAssistantState = await setAssistantStatePermit(store, {
+        ...permit,
+        docId,
+      });
+
+      await this._gristServer.getHomeDBManager().updateOrg(getScope(req), 0, {
+        userPrefs: {
+          showNewUserQuestions: false,
+        },
+      });
+
+      const url = new URL(
+        this._gristServer.getMergedOrgUrl(
+          req as RequestWithLogin,
+          `/doc/${docId}`
+        )
+      );
+      url.searchParams.set("assistantState", newAssistantState);
+      return res.redirect(url.href);
+    } catch (e) {
+      log.error(
+        `OpenAIAssistantV2Middleware failed to create doc in Home workspace`,
+        e
+      );
+    }
+  }
+
   private async _getCompletion(
     docSession: OptDocSession,
     doc: AssistanceDoc,
@@ -298,12 +418,13 @@ export class OpenAIAssistantV2 implements AssistantV2 {
         full: {
           version: 2,
           conversationId,
-          context: "context" in request ? request.context : undefined,
+          context: request.context,
           prompt: {
             index: start + index,
             role,
             content,
           },
+          developerPromptVersion: request.developerPromptVersion,
         },
       });
     }
@@ -438,6 +559,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
   ): Promise<AssistanceMessage> {
     const {
       context: { viewId },
+      developerPromptVersion = "default",
     } = request;
     const view = viewId ? await getView(doc, viewId) : undefined;
     const content = `<identity>
@@ -445,9 +567,30 @@ You are an AI assistant for [Grist](https://www.getgrist.com), a collaborative s
 </identity>
 
 <instructions>
-Help users answer questions about their document, modify records or schema, or write formulas.
-Always explain the proposed changes in plain language.
-Do not call modification APIs (e.g. add_records, update_records) until the user confirms explicitly.
+${
+  developerPromptVersion === "new-document"
+    ? "The user will probably ask you to build a particular type of document. " +
+      "Start by asking the user about their title/role, industry, and company. " +
+      'Phrase it like: "Could you tell me more about yourself to help me build the ' +
+      "perfect solution for you? Things like your title or role, industry and company " +
+      'will help me tweak the solution to better fit your specific needs." ' +
+      "Then, update the current document according to their answers and original prompt. " +
+      "You MUST add at least 3 example records to each new table. " +
+      "At the end, you MUST remove any irrelevant tables (e.g. Table1)."
+    : ""
+}
+Help users modify or answer questions about their document.
+${
+  developerPromptVersion !== "new-document"
+    ? "If the document looks new (i.e. only contains Table1), offer to set up the " +
+      "document layout/structure according to a particular use case or template."
+    : ""
+}
+After adding tables, ALWAYS ask the user if they'd like to add a few example records.
+Follow idiomatic Grist conventions, like using Reference columns to link records from
+related tables.
+Always explain proposed changes in plain language.
+DO NOT call modification APIs (e.g. add_records, update_records) until users confirm explicitly.
 </instructions>
 
 <tool_instructions>
@@ -463,10 +606,19 @@ Only SQLite-compatible SQL is supported.
 </query_document_instructions>
 
 <modification_instructions>
-Always use column IDs, not labels.
-Never set the id field in records.
-For updates or deletions, first query the table for id values.
-Only records, columns, pages, or tables can be modified.
+A document MUST have at least one table and page.
+A table MUST have at least one column.
+A page MUST have at least one widget.
+Always use column IDs, not labels, when calling add_records or update_records.
+Every table has an "id" column. NEVER set or modify it - only use it to
+specify which records to update or remove.
+Don't add ID columns when creating tables unless explicitly asked.
+Only records, columns, pages, widgets, and tables can be modified.
+When adding reference columns, try to set reference_show_column_id to a
+sensible column instead of leaving it unset, which defaults to showing
+the row ID.
+All documents start with a default table (Table1). If it's empty and
+a user asks you to create new tables, remove it.
 When setting choice_styles, only use values like:
 \`{"Choice 1": {"textColor": "#FFFFFF", "fillColor": "#16B378",
 "fontUnderline": false, "fontItalic": false, "fontStrikethrough": false}}\`

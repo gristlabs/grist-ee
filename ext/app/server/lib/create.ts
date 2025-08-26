@@ -1,4 +1,3 @@
-import {isAffirmative} from 'app/common/gutil';
 import { Activation } from 'app/gen-server/lib/Activation';
 import { addAdminControlsEndpoints } from 'app/gen-server/lib/AdminControls';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
@@ -66,9 +65,7 @@ class EnterpriseCreate extends BaseCreate {
   }
   public override areAdminControlsAvailable(): boolean { return true; }
   public override createDocNotificationManager(gristServer: GristServer) {
-    if (isAffirmative(process.env.GRIST_TEST_ENABLE_NOTIFICATIONS)) {
-      return createDocNotificationManager(gristServer);
-    }
+    return createDocNotificationManager(gristServer);
   }
 }
 
