@@ -38,6 +38,13 @@ function getPayloadKey(jobId: string) {
   return `payload:${jobId}`;
 }
 
+interface JobInfo {
+  jobId: string;
+  jobType: string;
+  batchKey: string;
+  logMeta: log.ILogMeta;
+}
+
 // This should be a number higher than anything possible in a batch, so that we can get a whole
 // batch using Redis's LPOP in one call.
 const batchUpperBound = 1_000_000_000;
@@ -73,11 +80,11 @@ export class BatchedJobs {
   /**
    * Add a job to the queue.
    */
-  public async add(jobType: string, batchKey: string, data: string) {
+  public async add(jobType: string, batchKey: string, logMeta: log.ILogMeta, data: string) {
     const schedule = this._types[jobType];
     if (!schedule) { throw new Error(`Unknown job type ${jobType}`); }
     const jobId = getJobId(schedule, batchKey);
-    log.debug('BatchedJobs adding job', jobId);
+    log.rawDebug(`BatchedJobs adding job`, {jobType, jobId, ...logMeta});
 
     // We are just doing rpush(key, data) here, plus batching with a check for whether a job
     // already exists. This is a minor optimization that allows us to make a single Redis
@@ -90,13 +97,13 @@ export class BatchedJobs {
       .exists(this.queue.getJobRedisKey(jobId), (err, _exists) => { exists = _exists; })
       .exec();
     if (!exists) {
-      await this._addJob({jobId, jobType, batchKey}, schedule.firstDelay);
+      await this._addJob({jobId, jobType, batchKey, logMeta}, schedule.firstDelay);
     }
   }
 
   private async _handleJob(handler: Handler, job: BullMQJob): Promise<void> {
-    const {jobId, jobType, batchKey} = job.data;
-    log.debug('BatchedJobs handling job', jobId);
+    const {jobId, jobType, batchKey, logMeta} = job.data;
+    log.rawDebug(`BatchedJobs handling job`, {jobType, jobId, ...logMeta});
     const batchedData = await this._redis.lpop(getPayloadKey(jobId), batchUpperBound);
     if (batchedData?.length) {
       const schedule = this._types[jobType];
@@ -108,13 +115,13 @@ export class BatchedJobs {
       //
       // Note a low-risk race condition: an add() between this handler finishing and the 'completed'
       // callback may add a job with 'firstDelay' (instead of the desired 'throttle' delay).
-      await job.updateData({jobId, jobType, batchKey, rescheduleDelay: schedule.throttle});
+      await job.updateData({jobId, jobType, batchKey, logMeta, rescheduleDelay: schedule.throttle});
 
       await handler(jobType, batchKey, batchedData);
     }
   }
 
-  private async _addJob(info: {jobId: string, jobType: string, batchKey: string}, delay: number) {
+  private async _addJob(info: JobInfo, delay: number) {
     await this.queue.add(this._name, info, {
       jobId: info.jobId,
       delay,
@@ -129,9 +136,9 @@ export class BatchedJobs {
    * schedule.throttle).
    */
   private async _maybeReschedule(job: GristJob) {
-    const {jobId, jobType, batchKey, rescheduleDelay} = job.data;
+    const {jobId, jobType, batchKey, logMeta, rescheduleDelay} = job.data;
     if (rescheduleDelay) {
-      await this._addJob({jobId, jobType, batchKey}, rescheduleDelay);
+      await this._addJob({jobId, jobType, batchKey, logMeta}, rescheduleDelay);
     }
   }
 }

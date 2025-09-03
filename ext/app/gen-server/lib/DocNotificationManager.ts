@@ -179,7 +179,7 @@ export class DocNotificationManager implements IDocNotificationManager {
         // If so, construct a payload for a notification to deliver. Note that tables is only null
         // when there are no changes to notify about. If it's an empty array, then there are
         // changes, just no user tables to report.
-        promises.push(this._pushDocChange(docId, userData.id, {authorUserId, tables}));
+        promises.push(this._pushDocChange(docId, userData, {authorUserId, tables}));
       }
     }
 
@@ -220,7 +220,7 @@ export class DocNotificationManager implements IDocNotificationManager {
           const hasMention = c.mentions.includes(user.ref!);
           return {authorUserId, hasMention, text: c.text, anchorLink: c.anchorLink};
         });
-        promises.push(this._pushComments(docId, user.id, payload));
+        promises.push(this._pushComments(docId, user, payload));
       }
     }
 
@@ -249,12 +249,14 @@ export class DocNotificationManager implements IDocNotificationManager {
     }));
   }
 
-  private _pushDocChange(docId: string, userId: number, data: DocChangeData) {
-    return this._batchedJobs.add('docChange', makeBatchKey(docId, userId), JSON.stringify(data));
+  private _pushDocChange(docId: string, user: UserAccessData, data: DocChangeData) {
+    const logMeta = getLogMeta(docId, user);
+    return this._batchedJobs.add('docChange', makeBatchKey(docId, user.id), logMeta, JSON.stringify(data));
   }
 
-  private _pushComments(docId: string, userId: number, data: CommentData[]) {
-    return this._batchedJobs.add('comment', makeBatchKey(docId, userId), JSON.stringify(data));
+  private _pushComments(docId: string, user: UserAccessData, data: CommentData[]) {
+    const logMeta = getLogMeta(docId, user);
+    return this._batchedJobs.add('comment', makeBatchKey(docId, user.id), logMeta, JSON.stringify(data));
   }
 }
 
@@ -380,6 +382,14 @@ function getUserInfo(user: FullUser): UserInfo {
 
 function hasDocChangeSubscribers(prefs: DocPrefs[]): boolean {
   return prefs.some(p => (p.notifications as NotificationPrefs).docChanges);
+}
+
+function getLogMeta(docId: string, user: UserAccessData) {
+  return {
+    userId: user.id,
+    email: user.email,
+    docId,
+  };
 }
 
 interface DocChangeData {

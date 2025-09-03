@@ -41,10 +41,11 @@ import {
   TokensExceededLaterMessageError,
 } from "app/server/lib/Assistant";
 import {
-  getAssistantStatePermit,
+  getAndRemoveAssistantStatePermit,
   setAssistantStatePermit,
 } from "app/server/lib/AssistantStatePermit";
 import { isAnonymousUser, RequestWithLogin } from "app/server/lib/Authorizer";
+import { getAndClearSignupStateCookie } from "app/server/lib/cookieUtils";
 import { createSavedDoc } from "app/server/lib/createSavedDoc";
 import { OptDocSession } from "app/server/lib/DocSession";
 import { expressWrap } from "app/server/lib/expressWrap";
@@ -108,7 +109,6 @@ import {
 } from "app/server/lib/requestUtils";
 import { runSQLQuery } from "app/server/lib/runSQLQuery";
 import { getSelectByOptions } from "app/server/lib/selectBy";
-import * as cookie from "cookie";
 import * as express from "express";
 import { isEmpty, omit, pick } from "lodash";
 import moment from "moment";
@@ -294,23 +294,18 @@ export class OpenAIAssistantV2 implements AssistantV2 {
     req: express.Request,
     res: express.Response
   ): Promise<void> {
-    const cookies = cookie.parse(req.headers.cookie || "");
-
-    res.clearCookie("gr_signup_state");
-
-    const stateCookie = cookies["gr_signup_state"];
-    if (!stateCookie) {
+    const state = getAndClearSignupStateCookie(req, res);
+    if (!state) {
       return;
     }
 
-    const state = safeJsonParse(stateCookie, {});
     const { assistantState, srcDocId } = state;
     if (!assistantState) {
       return;
     }
 
     const store = this._gristServer.getPermitStore();
-    const permit = await getAssistantStatePermit(store, assistantState);
+    const permit = await getAndRemoveAssistantStatePermit(store, assistantState);
     if (!permit) {
       return;
     }

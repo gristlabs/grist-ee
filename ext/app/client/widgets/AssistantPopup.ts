@@ -1,7 +1,6 @@
 import * as commands from 'app/client/components/commands';
 import { GristDoc } from "app/client/components/GristDoc";
 import { ChatHistory } from "app/client/models/ChatHistory";
-import { urlState } from "app/client/models/gristUrlState";
 import { makeT } from "app/client/lib/localization";
 import {
   localStorageJsonObs,
@@ -12,7 +11,6 @@ import { logTelemetryEvent } from "app/client/lib/telemetry";
 import { FloatingPopup, PopupPosition } from "app/client/ui/FloatingPopup";
 import {
   cssLinkText,
-  cssLinkTextAccent,
   cssPageEntry,
   cssPageIcon,
   cssPageLink,
@@ -201,14 +199,8 @@ export function buildOpenAssistantButton(
     cssPageLink(
       cssPageIcon("Robot"),
       cssLinkText(t("Assistant")),
-      cssLinkTextAccent(t("New")),
       dom.on("click", () => commands.allCommands.activateAssistant.run()),
-      gristDoc.behavioralPromptsManager.attachPopup("newAssistant", {
-        isDisabled: () => !!urlState().state.get().params?.assistantState,
-        popupOptions: {
-          placement: "right-start",
-        },
-      }),
+      dom.cls("tour-assistant"),
       ...args
     )
   );
