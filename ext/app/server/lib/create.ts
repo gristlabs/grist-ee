@@ -15,6 +15,8 @@ import { isRunningEnterprise } from 'app/server/lib/ActivationReader';
 import { CoreCreate } from 'app/server/lib/coreCreator';
 import { getLoginSystem } from "app/server/lib/logins";
 import {EmptyNotifier, INotifier} from 'app/server/lib/INotifier';
+import {InstallAdmin} from 'app/server/lib/InstallAdmin';
+import {createInstallAdminUsingOrg} from 'app/server/lib/InstallAdminUsingOrg';
 import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
 import {GristLoginSystem, GristServer} from 'app/server/lib/GristServer';
 import {Express} from 'express';
@@ -56,6 +58,9 @@ class EnterpriseCreate extends BaseCreate {
   }
   public override Assistant(gristServer: GristServer) {
     return configureAssistant(gristServer);
+  }
+  public override async createInstallAdmin(dbManager: HomeDBManager): Promise<InstallAdmin> {
+    return createInstallAdminUsingOrg(dbManager);
   }
   public override getLoginSystem(): Promise<GristLoginSystem> {
     return getLoginSystem();

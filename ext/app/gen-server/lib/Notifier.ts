@@ -17,6 +17,7 @@ import {
 } from 'app/gen-server/lib/homedb/HomeDBManager';
 import {
   DocNotificationEvent,
+  DocNotificationTemplateBase,
   SendGridConfig,
   SendGridMail,
   SendGridMailWithTemplateId,
@@ -167,9 +168,7 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
       _gristServer,
       _dbManager, {
         unsubscribeGroup: this._sendgridConfig.unsubscribeGroup,
-        address: {
-          from: this._sendgridConfig.address.from,
-        }
+        address: this._sendgridConfig.address,
       }
     );
   }
@@ -360,7 +359,9 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
   /**
    * Handler for document notifications, including docChange and comment events.
    */
-  public async docNotification(event: DocNotificationEvent, userId: number, templateData: object): Promise<void> {
+  public async docNotification(
+    event: DocNotificationEvent, userId: number, templateData: DocNotificationTemplateBase
+  ): Promise<void> {
     const templateId = this._getTemplateId(event);
     if (!templateId) { return; }
     const mail = await this._tools.docNotification(event, userId, templateData);

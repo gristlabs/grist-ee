@@ -593,6 +593,7 @@ Use get_tables and get_table_columns to discover valid IDs.
 When the user refers to a column label, match it to the ID using get_table_columns.
 If a table or column doesn't exist, check it hasn't been removed since you last queried the schema.
 If a call fails due to insufficient access, tell the user they need full access to the document.
+Use get_grist_access_rules_reference to learn how to answer questions about document access.
 </tool_instructions>
 
 <query_document_instructions>
@@ -944,6 +945,10 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
           ));
           break;
         }
+        case "get_grist_access_rules_reference": {
+          result = this._helpAccessRules();
+          break;
+        }
         default: {
           throw new Error(`Unrecognized function: ${name}`);
         }
@@ -956,6 +961,90 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
         appliedActions,
       };
     }
+  }
+
+  private _helpAccessRules() {
+    return `<access_rules_help>
+<intro>
+This is background material for the Grist Assistant. Use it to learn how
+to query and read access rules. If the user has a question about access rules,
+answer specifically, explaining the access rules in the document, and not just
+talking in generalities.
+</intro>
+
+<overview>
+Access rules are stored in special tables:
+- _grist_ACLRules: list of rules. Order matters (rulePos).
+- _grist_ACLResources: defines the scope (table and columns) for each rule.
+Join _grist_ACLRules.resource to _grist_ACLResources for context.
+Ignore resources not referenced by a rule.
+Group rules by resource when describing them.
+</overview>
+
+<schema>
+_grist_ACLRules:
+  resource (Ref:_grist_ACLResources)
+  aclFormula (Text, Python subset)
+  permissionsText (Text: '+CRUDS', '-RU', ..., 'all', 'none')
+  rulePos (PositionNumber)
+  memo (Text)
+
+_grist_ACLResources:
+  tableId (Text)
+  colIds (Text: '*' or comma-separated column IDs)
+</schema>
+
+<permissions>
+Actions and their codes:
+  C - Create rows
+  R - Read cells
+  U - Update cells
+  D - Delete rows
+  S - Change table structure
+A leading + allows, - denies. Example: '+CRUD', '-RU'.
+Rules are evaluated in order; the first match for each permission wins.
+</permissions>
+
+<formulas>
+aclFormula is a condition using a Python-like syntax.
+
+Variables:
+  user.Access (owners | editors | viewers)
+  user.Email, user.UserID, user.Name, user.LinkKey, user.SessionID
+  rec (current record)
+  newRec (proposed record after edit)
+Custom user attributes (from userAttributes) may add variables like user.Person.
+
+Supported operators: and, or, +, -, *, /, %, ==, !=, <, <=, >, >=, is, is not, in, not in.
+</formulas>
+
+<guidance>
+When answering access-rule questions:
+1. Mention any custom user attributes first.
+2. List rules grouped by resource (table/columns).
+3. For each rule, explain who (formula) and what (permissions).
+4. Highlight row-level conditions (rec, newRec) if present.
+5. First match for each permission wins.
+6. When creating rules, always add a memo starting with [PROPOSED].
+</guidance>
+
+<examples>
+Example 1: Owners only for Houses:
+- Resource: Houses, all columns (*)
+- Rule: user.Access != OWNER
+- Permissions: none (-CRUDS)
+
+Example 2: Editors can update Jobs only when Ready:
+- user.Access == OWNER, +CRUDS
+- user.Access == EDITOR and rec.Ready != True, -U
+- user.Access == EDITOR, all
+- everyone else, none
+
+Notes:
+- Resources are part of rules, never listed alone.
+- The memo helps explain rules to denied users.
+</examples>
+</access_rules_help>`;
   }
 
   private _getTables(doc: AssistanceDoc) {

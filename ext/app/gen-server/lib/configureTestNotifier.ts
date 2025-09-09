@@ -7,10 +7,9 @@ export function configureTestNotifier(dbManager: HomeDBManager, gristServer: Gri
   return new TestNotifier({
     dbManager, gristServer, options: {
       address: {
-        from: {
-          email: 'support@getgrist.com',
-          name: 'Grist',
-        }
+        from: { name: 'Grist', email: 'support@getgrist.com' },
+        docNotificationsFrom: { name: 'Grist Test', email: 'support-notifications@getgrist.com' },
+        docNotificationsReplyTo: { name: 'Grist Test', email: 'support-no-reply@getgrist.com' },
       }
     }
   });

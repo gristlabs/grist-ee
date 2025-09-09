@@ -9,7 +9,7 @@ import { Organization } from 'app/gen-server/entity/Organization';
 import { User } from 'app/gen-server/entity/User';
 import { Workspace } from 'app/gen-server/entity/Workspace';
 import { HomeDBManager, UserChange, UserIdDelta } from "app/gen-server/lib/homedb/HomeDBManager";
-import { DocNotificationEvent, NotifierEventName,
+import { DocNotificationEvent, DocNotificationTemplateBase, NotifierEventName,
          SendGridAddress, SendGridBillingTemplate, SendGridInviteResourceKind,
          SendGridInviteTemplate, SendGridMail, SendGridMemberChangeTemplate,
          SendGridPersonalization, TwoFactorEvent } from 'app/gen-server/lib/NotifierTypes';
@@ -34,7 +34,9 @@ export interface NotifierToolsOptions {
     invites?: number,
   };
   address: {
-    from: SendGridAddress
+    from: SendGridAddress;
+    docNotificationsFrom: SendGridAddress;
+    docNotificationsReplyTo: SendGridAddress;
   };
 }
 
@@ -329,7 +331,9 @@ export class NotifierTools implements INotifierTools {
     };
   }
 
-  public async docNotification(event: DocNotificationEvent, userId: number, templateData: object) {
+  public async docNotification(
+    event: DocNotificationEvent, userId: number, templateData: DocNotificationTemplateBase
+  ) {
     const user = await this._dbManager.getFullUser(userId);
 
     // We are only sending doc notifications to users who logged in at least once.
@@ -342,7 +346,18 @@ export class NotifierTools implements INotifierTools {
       to: [this._asSendGridAddress(user)],
       dynamic_template_data: templateData
     }];
-    const mail: SendGridMail = {...this._fromGrist(), personalizations};
+    const mail: SendGridMail = {
+      from: this._options.address.docNotificationsFrom,
+      reply_to: this._options.address.docNotificationsReplyTo,
+      personalizations,
+    };
+    // We'll send emails with headers like this:
+    //   From: "MyCompany <notifications@example.com>" -- when multiple authors
+    //   From: "Bob (via Grist) <notifications@example.com>" -- when a single author
+    //   Reply-To: "MyCompany <no-reply@example.com>".
+    if (templateData.senderAuthorName) {
+      mail.from = {...mail.from, name: `${templateData.senderAuthorName} (via Grist)`};
+    }
     return {
       logging: [async () => { log.debug(`notifications: sending docNotification`); }],
       content: mail,

@@ -1166,4 +1166,13 @@ export const OPENAI_TOOLS: OpenAITool[] = [
       strict: true,
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "get_grist_access_rules_reference",
+      description:
+      "Returns internal reference material explaining how Grist access rules work, " +
+          "for assistant reasoning only (not shown to the user).",
+    },
+  },
 ];

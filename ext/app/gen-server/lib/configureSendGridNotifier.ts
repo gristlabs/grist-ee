@@ -9,10 +9,13 @@ import {GristServer} from 'app/server/lib/GristServer';
  */
 export const SENDGRID_CONFIG: SendGridConfig = {
   address: {
-    from: {
-      email: 'support@example.com',
-      name: 'Replace This',
-    },
+    from: { name: 'Replace This', email: 'support@example.com' },
+
+    // Notifications "From" address is visible to users but isn't used for replies. It could be
+    // the same as your support inbox, or an alias to it. "ReplyTo" is used for replies. There is
+    // no support for replying to comments by email; a "no-reply" address makes that clearer.
+    docNotificationsFrom: { name: 'Replace This', email: 'notifications@example.com' },
+    docNotificationsReplyTo: { name: 'Replace This', email: 'no-reply@example.com' },
   },
   template: {
     invite: 'sendgrid-template-id',

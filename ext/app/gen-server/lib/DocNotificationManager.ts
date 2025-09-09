@@ -30,6 +30,7 @@ import NotificationPrefsTI from 'app/common/NotificationPrefs-ti';
 import { Document } from 'app/gen-server/entity/Document';
 import { HomeDBCaches } from 'app/gen-server/lib/homedb/Caches';
 import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
+import { DocNotificationTemplateBase } from 'app/gen-server/lib/NotifierTypes';
 import { BatchedJobs, Schedule } from 'app/server/lib/BatchedJobs';
 import { OptDocSession } from 'app/server/lib/DocSession';
 import { DocComment } from 'app/common/DocComments';
@@ -295,7 +296,7 @@ class DocNotificationHandler {
     }
   }
 
-  private async _getCommonInfo(batchKey: string) {
+  private async _getCommonInfo(batchKey: string): Promise<DocNotificationsCommonTemplateData> {
     const {docId, userId} = parseBatchKey(batchKey);
     const doc = await this._homeDb.getRawDocById(docId);
     const docUrl = await this._gristServer.getResourceUrl(doc);
@@ -315,6 +316,7 @@ class DocNotificationHandler {
     const authorsById = await this._getUserInfoById([...authors.keys()]);
     const template: DocChangesTemplateData = {
       ...(await this._getCommonInfo(batchKey)),
+      senderAuthorName: getSenderAuthorName(authorsById),
       authors: Array.from(authors, ([authorUserId, tables]) => ({
         user: authorsById.get(authorUserId)!,
         tables: Array.from(tables),
@@ -332,6 +334,7 @@ class DocNotificationHandler {
     const authorsById = await this._getUserInfoById([...authorUserIds]);
     const template: CommentsTemplateData = {
       ...(await this._getCommonInfo(batchKey)),
+      senderAuthorName: getSenderAuthorName(authorsById),
       authorNames: Array.from(authorUserIds, r => authorsById.get(r)?.name || 'Unknown'),
       // Need this for saying "Comments from Alice, Bob, and 2 others" (if there are 4 authors).
       numAuthorsMinus2: authorUserIds.size - 2,
@@ -384,6 +387,11 @@ function hasDocChangeSubscribers(prefs: DocPrefs[]): boolean {
   return prefs.some(p => (p.notifications as NotificationPrefs).docChanges);
 }
 
+// Extracts the name of the author when there is a single one; for NotifierTools to include into "From" address.
+function getSenderAuthorName(authorsById: Map<unknown, UserInfo>): string|null {
+  return (authorsById.size === 1) ? [...authorsById.values()][0].name : null;
+}
+
 function getLogMeta(docId: string, user: UserAccessData) {
   return {
     userId: user.id,
@@ -392,15 +400,19 @@ function getLogMeta(docId: string, user: UserAccessData) {
   };
 }
 
+export interface DocNotificationsCommonTemplateData {
+  docName: string;
+  docUrl: string;
+  unsubscribeUrl: string;
+  unsubscribeFullyUrl: string;
+}
+
 interface DocChangeData {
   authorUserId: number;
   tables: string[];
 }
 
-interface DocChangesTemplateData {
-  docName: string;
-  docUrl: string;
-  unsubscribeUrl: string;
+interface DocChangesTemplateData extends DocNotificationTemplateBase, DocNotificationsCommonTemplateData {
   authors: Array<{
     user: UserInfo;
     tables: string[];
@@ -415,13 +427,9 @@ interface CommentData {
   anchorLink: string;
 }
 
-interface CommentsTemplateData {
-  docName: string;
-  docUrl: string;
+interface CommentsTemplateData extends DocNotificationTemplateBase, DocNotificationsCommonTemplateData {
   authorNames: string[];
   numAuthorsMinus2: number;
-  unsubscribeUrl: string;
-  unsubscribeFullyUrl: string;
   hasMentions: boolean;
   comments: Array<{
     hasMention: boolean;
