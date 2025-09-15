@@ -1,5 +1,5 @@
 import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
-import {Notifier} from 'app/gen-server/lib/Notifier';
+import {SendGridNotifier} from 'app/gen-server/lib/SendGridNotifier';
 import {SendGridConfig} from 'app/gen-server/lib/NotifierTypes';
 import {GristServer} from 'app/server/lib/GristServer';
 
@@ -61,5 +61,5 @@ export function configureSendGridNotifier(dbManager: HomeDBManager, gristServer:
   const sendgridConfig = settings?.sendgrid as SendGridConfig|undefined;
   if (!sendgridConfig) { return undefined; }
 
-  return new Notifier(dbManager, gristServer, sendgridConfig);
+  return new SendGridNotifier(dbManager, gristServer, sendgridConfig);
 }

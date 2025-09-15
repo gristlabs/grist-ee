@@ -11,7 +11,6 @@ import {Workspace} from 'app/gen-server/entity/Workspace';
 import { SENDGRID_CONFIG } from 'app/gen-server/lib/configureSendGridNotifier';
 import {
   HomeDBManager,
-  NotifierEvents,
   UserChange,
   UserIdDelta
 } from 'app/gen-server/lib/homedb/HomeDBManager';
@@ -29,10 +28,9 @@ import {
 } from 'app/gen-server/lib/SendGridTypes';
 import {appSettings} from 'app/server/lib/AppSettings';
 import {GristServer} from 'app/server/lib/GristServer';
-import {BaseNotifier, INotifier} from 'app/server/lib/INotifier';
+import {INotifier} from 'app/server/lib/INotifier';
 import log from 'app/server/lib/log';
 import { Mailer, NotifierTools } from 'app/gen-server/lib/NotifierTools';
-import EventEmitter from 'events';
 import fetch from 'node-fetch';
 
 export const SENDGRID_API_CONFIG = {
@@ -58,17 +56,15 @@ export type NotifierSendMessageCallback = (body: SendGridMailWithTemplateId, des
 /**
  * A notifier that sends no messages, and is sufficient only for unsubscribing/removing a user.
  */
-export class UnsubscribeNotifier extends BaseNotifier {
+export class UnsubscribeNotifier {
   protected _testSendMessageCallback?: NotifierSendMessageCallback;
   protected readonly _sendGridKey: string|undefined =
     appSettings.section('notifications').flag('sendGridKey')
     .readString({envVar: 'SENDGRID_API_KEY', censor: true});
 
-  public constructor(protected _dbManager: HomeDBManager, protected _sendgridConfig: SendGridConfig) {
-    super();
-  }
+  public constructor(protected _dbManager: HomeDBManager, protected _sendgridConfig: SendGridConfig) {}
 
-  public override async deleteUser(userId: number) {
+  public async deleteUser(userId: number) {
     if (!this._sendGridKey) {
       log.warn(`API key not set, cannot delete user ${userId} from sendgrid`);
       return;
@@ -152,7 +148,7 @@ export class UnsubscribeNotifier extends BaseNotifier {
  * for describing users, and it knows the home url so that it can construct links for
  * resources.
  */
-export class Notifier extends UnsubscribeNotifier implements INotifier {
+export class SendGridNotifier extends UnsubscribeNotifier implements INotifier {
   private _gristConfig: GristLoadConfig;
   private _tools: NotifierTools;
 
@@ -173,11 +169,8 @@ export class Notifier extends UnsubscribeNotifier implements INotifier {
     );
   }
 
-  public subscribe(emitter: EventEmitter): void {
-    for (const method of NotifierEvents.values) {
-      emitter.on(method, (...args) => (this[method] as any)(...args));
-    }
-  }
+  // TODO: Does this method actually have to do with Notifiers at all?
+  public async streamingDestinationsChange() {}
 
   public async applyTemplate(templateId: string, mail: Mailer<SendGridMail>) {
     await this._tools.runLogging(mail.logging);

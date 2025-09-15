@@ -2,8 +2,8 @@ import { Activation } from 'app/gen-server/lib/Activation';
 import { addAdminControlsEndpoints } from 'app/gen-server/lib/AdminControls';
 import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
 import { configureSMTPNotifier } from 'app/gen-server/lib/configureSMTPNotifier';
-import { configureTestNotifier } from 'app/gen-server/lib/configureTestNotifier';
 import { createDocNotificationManager } from 'app/gen-server/lib/DocNotificationManager';
+import { configureTestNotifier } from 'app/gen-server/lib/TestNotifier';
 import { configureAssistant } from 'app/server/lib/configureAssistant';
 import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/server/lib/configureAzureExternalStorage';
 import { configureEnterpriseAuditLogger } from 'app/server/lib/configureEnterpriseAuditLogger';
@@ -14,7 +14,7 @@ import { BaseCreate, ICreate, ICreateStorageOptions } from 'app/server/lib/ICrea
 import { isRunningEnterprise } from 'app/server/lib/ActivationReader';
 import { CoreCreate } from 'app/server/lib/coreCreator';
 import { getLoginSystem } from "app/server/lib/logins";
-import {EmptyNotifier, INotifier} from 'app/server/lib/INotifier';
+import {INotifier} from 'app/server/lib/INotifier';
 import {InstallAdmin} from 'app/server/lib/InstallAdmin';
 import {createInstallAdminUsingOrg} from 'app/server/lib/InstallAdminUsingOrg';
 import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
@@ -47,11 +47,10 @@ class EnterpriseCreate extends BaseCreate {
   public override Billing(dbManager: HomeDBManager, gristServer: GristServer): IBilling {
     return new Activation(dbManager, gristServer);
   }
-  public override Notifier(dbManager: HomeDBManager, gristServer: GristServer): INotifier {
+  public override Notifier(dbManager: HomeDBManager, gristServer: GristServer): INotifier|undefined {
     return configureSMTPNotifier(dbManager, gristServer) ||
       configureTestNotifier(dbManager, gristServer) ||
-      configureSendGridNotifier(dbManager, gristServer) ||
-      EmptyNotifier;
+      configureSendGridNotifier(dbManager, gristServer);
   }
   public override AuditLogger(dbManager: HomeDBManager, gristServer: GristServer) {
     return configureEnterpriseAuditLogger(dbManager, gristServer);
