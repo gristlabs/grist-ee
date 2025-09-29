@@ -40,7 +40,7 @@ import * as t from 'ts-interface-checker';
 const { NodemailerSender } = t.createCheckers(NodemailerConfigTI);
 
 export function configureSMTPNotifier(dbManager: HomeDBManager, gristServer: GristServer) {
-  if ( !process.env.GRIST_NODEMAILER_SENDER || !process.env.GRIST_NODEMAILER_CONFIG) {
+  if (!process.env.GRIST_NODEMAILER_SENDER || !process.env.GRIST_NODEMAILER_CONFIG) {
     return undefined;
   }
   try{

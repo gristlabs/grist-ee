@@ -27,13 +27,14 @@ import { setDefault } from 'app/common/gutil';
 import { fillNotificationPrefs } from 'app/common/NotificationsConfigAPI';
 import { NotificationPrefs, NotificationPrefsBundle } from 'app/common/NotificationPrefs';
 import NotificationPrefsTI from 'app/common/NotificationPrefs-ti';
-import { Document } from 'app/gen-server/entity/Document';
 import { HomeDBCaches } from 'app/gen-server/lib/homedb/Caches';
 import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
-import { DocNotificationTemplateBase } from 'app/gen-server/lib/NotifierTypes';
+import { DocNotificationEvent, DocNotificationTemplateBase } from 'app/gen-server/lib/NotifierTypes';
 import { BatchedJobs, Schedule } from 'app/server/lib/BatchedJobs';
 import { OptDocSession } from 'app/server/lib/DocSession';
 import { DocComment } from 'app/common/DocComments';
+import { addUnsubscribeEndpoint, createUnsubscribeUrl } from 'app/gen-server/lib/DocNotificationUnsubscribes';
+import type { GranularAccessForBundle } from 'app/server/lib/GranularAccess';
 import { IDocNotificationManager } from 'app/server/lib/IDocNotificationManager';
 import { INotifier } from 'app/server/lib/INotifier';
 import { DocActionCategory, DocActionsDescription, sortDocActionCategories } from 'app/server/lib/describeDocActions';
@@ -46,8 +47,6 @@ import express from 'express';
 import { createCheckers } from "ts-interface-checker";
 import flatten from 'lodash/flatten';
 import pick from 'lodash/pick';
-
-import type { GranularAccessForBundle } from 'app/server/lib/GranularAccess';
 
 // Defines the schedule for notifications.
 const schedulesByType: {[jobType: string]: Schedule} = {
@@ -144,6 +143,8 @@ export class DocNotificationManager implements IDocNotificationManager {
 
   public initHomeServer(app: express.Express): void {
     addConfigEndpoints(this._homeDb, app);
+    addUnsubscribeEndpoint(this._gristServer, app);
+
     // DocNotificationHandler is just there to organize a few bits of related code. We don't yet
     // need to hold a reference to it or to close it on exit. FlexServer already stops GristJobs
     // on exit, which takes care of in-progress job handlers.
@@ -297,13 +298,24 @@ class DocNotificationHandler {
     }
   }
 
-  private async _getCommonInfo(batchKey: string): Promise<DocNotificationsCommonTemplateData> {
+  private async _getCommonInfo(
+    batchKey: string,
+    notification: DocNotificationEvent
+  ): Promise<DocNotificationsCommonTemplateData> {
     const {docId, userId} = parseBatchKey(batchKey);
     const doc = await this._homeDb.getRawDocById(docId);
     const docUrl = await this._gristServer.getResourceUrl(doc);
-    const unsubscribeUrl = this._createUnsubscribeUrl(doc, userId, 'normal');
-    const unsubscribeFullyUrl = this._createUnsubscribeUrl(doc, userId, 'full');
-    return { docName: doc.name, docUrl, unsubscribeUrl, unsubscribeFullyUrl };
+    const homeUrl = this._gristServer.getGristConfig().homeUrl;
+    if (!homeUrl) {
+      throw new Error("DocNotificationHandler: cannot deliver notifications: homeUrl is not set");
+    }
+    const user = await this._homeDb.getUserAndEnsureUnsubscribeKey(userId);
+    if (!user) {
+      throw new Error(`DocNotificationHandler: user ${userId} not found`);
+    }
+    const unsubscribeUrl: string = createUnsubscribeUrl({homeUrl, doc, user, notification, mode: 'normal'});
+    const unsubscribeFullyUrl: string = createUnsubscribeUrl({homeUrl, doc, user, notification, mode: 'full'});
+    return {docName: doc.name, docUrl, unsubscribeUrl, unsubscribeFullyUrl};
   }
 
   private async _sendDocChanges(batchKey: string, docChanges: DocChangeData[]) {
@@ -314,7 +326,7 @@ class DocNotificationHandler {
     }
     const authorsById = await this._getUserInfoById([...authors.keys()]);
     const template: DocChangesTemplateData = {
-      ...(await this._getCommonInfo(batchKey)),
+      ...(await this._getCommonInfo(batchKey, 'docChanges')),
       senderAuthorName: getSenderAuthorName(authorsById),
       authors: Array.from(authors, ([authorUserId, descriptions]) => {
         // Combine userTableNames from all descriptions using a Set for uniqueness.
@@ -339,7 +351,7 @@ class DocNotificationHandler {
     const authorUserIds = new Set<number>(comments.map(c => c.authorUserId));
     const authorsById = await this._getUserInfoById([...authorUserIds]);
     const template: CommentsTemplateData = {
-      ...(await this._getCommonInfo(batchKey)),
+      ...(await this._getCommonInfo(batchKey, 'comments')),
       senderAuthorName: getSenderAuthorName(authorsById),
       authorNames: Array.from(authorUserIds, r => authorsById.get(r)?.name || 'Unknown'),
       // Need this for saying "Comments from Alice, Bob, and 2 others" (if there are 4 authors).
@@ -360,21 +372,8 @@ class DocNotificationHandler {
     const users = await this._homeDb.usersManager().getUsersByIds(userIds, {withLogins: true});
     return new Map(users.map(u => [u.id, getUserInfo(this._homeDb.makeFullUser(u))]));
   }
-
-  /**
-   * TODO: Not yet implemented.
-   * Creates a URL that allows unsubscribing from notifications in this document for the given
-   * user. In 'normal' mode, resets notifications preferences to defaults ("comment replies &
-   * mentions only"). In 'full' mode, sets notifications preferences to opt out even of those.
-   */
-  private _createUnsubscribeUrl(doc: Document, userId: number, mode: 'normal'|'full') {
-    // TODO The idea is to set a Permit, with a long-ish TTL (perhaps
-    // 24 hours or a week), and add a special endpoint that would check this permit. It may be simpler to
-    // bypass the actual Permit system and use Redis directly, in which case we only need one key
-    // per (doc,user), updating TTL to keep a valid window.
-    return '';
-  }
 }
+
 
 function makeBatchKey(docId: string, userId: number) {
   return `${docId}:${userId}`;
@@ -429,15 +428,37 @@ interface DocChangesTemplateData extends DocNotificationTemplateBase, DocNotific
 }
 
 interface CommentData {
+  /**
+   * Id of the user who authored the comment.
+   */
   authorUserId: number;
+  /**
+   * True if the comment mentions the recipient user in the text.
+   */
   hasMention: boolean;
+  /**
+   * Text of the comment.
+   */
   text: string;
+  /**
+   * Anchor link to the comment in the document.
+   */
   anchorLink: string;
 }
 
 interface CommentsTemplateData extends DocNotificationTemplateBase, DocNotificationsCommonTemplateData {
+  /**
+   * Name of the authors of the comments.
+   */
   authorNames: string[];
+  /**
+   * Number of authors minus 2 (as we can't do math in templates).
+   */
   numAuthorsMinus2: number;
+  /**
+   * Recipient preference for comments. True if user just wants to be notified about mentions
+   * otherwise false.
+   */
   hasMentions: boolean;
   comments: Array<{
     hasMention: boolean;
