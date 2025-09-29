@@ -268,21 +268,32 @@
                 </h1>
                 <ul>
                 {{#each authors}}
-                <li style="margin: 20px 0 10px; color: #555555;">
-                    <b>{{this.user.name}}</b> made changes
-                      {{#notEquals (length this.tables) 0~}}
-                        to
-                        {{#equals (length this.tables) 1~}}
-                          {{this.tables.[0]}}
-                        {{~else}}{{#equals (length this.tables) 2~}}
-                          {{this.tables.[0]}} and {{this.tables.[1]}}
-                        {{~else}}{{#equals (length this.tables) 3~}}
-                          {{this.tables.[0]}}, {{this.tables.[1]}}, and {{this.tables.[2]}}
-                        {{~else~}}
-                          {{this.tables.[0]}}, {{this.tables.[1]}}, and {{this.numTablesMinus2}} others
-                        {{~/equals}}{{/equals}}{{/equals~}}.
-                      {{~/notEquals}}
-                </li>
+                  {{#notEquals (length this.tables) 0~}}
+                  <li style="margin: 20px 0 10px; color: #555555;">
+                    <b>{{this.user.name}}</b> made changes to
+                      {{#equals (length this.tables) 1~}}
+                        table <b>{{this.tables.[0]}}</b>
+                      {{~else}}{{#equals (length this.tables) 2~}}
+                        tables <b>{{this.tables.[0]}}</b> and <b>{{this.tables.[1]}}</b>
+                      {{~else}}{{#equals (length this.tables) 3~}}
+                        tables <b>{{this.tables.[0]}}</b>, <b>{{this.tables.[1]}}</b>, and <b>{{this.tables.[2]}}</b>
+                      {{~else~}}
+                        tables <b>{{this.tables.[0]}}</b>, <b>{{this.tables.[1]}}</b>, and {{this.numTablesMinus2}} others
+                      {{~/equals}}{{/equals}}{{/equals~}}.
+                  </li>
+                  {{~/notEquals}}
+                  {{#if this.categories}}{{#notEquals (length this.categories) 0~}}
+                  <li style="margin: 20px 0 10px; color: #555555;">
+                    <b>{{this.user.name}}</b> made changes to the document's {{#each this.categories~}}
+                      {{~#unless @first~}}
+                        {{~#if @last~}}
+                          {{~#equals @index 1}} and {{else}}, and {{/equals~}}
+                        {{~else}}, {{/if~}}
+                      {{~/unless~}}
+                      {{this}}
+                    {{~/each}}.
+                  </li>
+                  {{~/notEquals}}{{/if}}
                 {{/each}}
                 </ul>
               </td>

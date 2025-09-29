@@ -23,7 +23,7 @@
 import { ApiError } from 'app/common/ApiError';
 import { DocPrefs, FullDocPrefs } from 'app/common/Prefs';
 import { FullUser, UserAccessData } from 'app/common/UserAPI';
-import { getSetMapValue } from 'app/common/gutil';
+import { setDefault } from 'app/common/gutil';
 import { fillNotificationPrefs } from 'app/common/NotificationsConfigAPI';
 import { NotificationPrefs, NotificationPrefsBundle } from 'app/common/NotificationPrefs';
 import NotificationPrefsTI from 'app/common/NotificationPrefs-ti';
@@ -36,6 +36,7 @@ import { OptDocSession } from 'app/server/lib/DocSession';
 import { DocComment } from 'app/common/DocComments';
 import { IDocNotificationManager } from 'app/server/lib/IDocNotificationManager';
 import { INotifier } from 'app/server/lib/INotifier';
+import { DocActionCategory, DocActionsDescription, sortDocActionCategories } from 'app/server/lib/describeDocActions';
 import { expressWrap } from 'app/server/lib/expressWrap';
 import { docEmailsQueue, GristBullMQJobs, GristJob } from 'app/server/lib/GristJobs';
 import { GristServer } from 'app/server/lib/GristServer';
@@ -175,12 +176,12 @@ export class DocNotificationManager implements IDocNotificationManager {
       .map(p => p.user));
     for (const userData of usersForDocChanges) {
       // For each user opted-in to doc changes, check if there are any direct actions visible to them.
-      const tables: string[]|null = await accessControl.getDirectTablesInBundle(userData);
-      if (tables !== null) {
+      const description = await accessControl.getDirectTablesInBundle(userData);
+      if (description !== null) {
         // If so, construct a payload for a notification to deliver. Note that tables is only null
         // when there are no changes to notify about. If it's an empty array, then there are
         // changes, just no user tables to report.
-        promises.push(this._pushDocChange(docId, userData, {authorUserId, tables}));
+        promises.push(this._pushDocChange(docId, userData, {authorUserId, ...description}));
       }
     }
 
@@ -306,24 +307,29 @@ class DocNotificationHandler {
   }
 
   private async _sendDocChanges(batchKey: string, docChanges: DocChangeData[]) {
-    const authors = new Map<number, Set<string>>();
+    // Maps author's userId to list of DocActionsDescriptions they authored.
+    const authors = new Map<number, DocActionsDescription[]>();
     for (const c of docChanges) {
-      const tables = getSetMapValue(authors, c.authorUserId, () => new Set());
-      for (const t of c.tables) {
-        tables.add(t);
-      }
+      setDefault(authors, c.authorUserId, []).push(c);
     }
     const authorsById = await this._getUserInfoById([...authors.keys()]);
     const template: DocChangesTemplateData = {
       ...(await this._getCommonInfo(batchKey)),
       senderAuthorName: getSenderAuthorName(authorsById),
-      authors: Array.from(authors, ([authorUserId, tables]) => ({
-        user: authorsById.get(authorUserId)!,
-        tables: Array.from(tables),
-        // Need this for saying "Bob made changes to T1, T2, and 3 other tables." (in case of 5
-        // tables, for example.)
-        numTablesMinus2: tables.size - 2,
-      })),
+      authors: Array.from(authors, ([authorUserId, descriptions]) => {
+        // Combine userTableNames from all descriptions using a Set for uniqueness.
+        const tables: string[] = [...new Set(descriptions.flatMap(d => d.userTableNames))];
+        const categories = sortDocActionCategories(new Set(descriptions.flatMap(d => d.categories)));
+
+        return {
+          user: authorsById.get(authorUserId)!,
+          tables,
+          categories,
+          // Need this for saying "Bob made changes to T1, T2, and 3 other tables." (in case of 5
+          // tables, for example.)
+          numTablesMinus2: tables.length - 2,
+        };
+      }),
     };
     const {userId} = parseBatchKey(batchKey);
     await this._notifier.docNotification('docChanges', userId, template);
@@ -409,13 +415,15 @@ export interface DocNotificationsCommonTemplateData {
 
 interface DocChangeData {
   authorUserId: number;
-  tables: string[];
+  userTableNames: string[];
+  categories: DocActionCategory[];
 }
 
 interface DocChangesTemplateData extends DocNotificationTemplateBase, DocNotificationsCommonTemplateData {
   authors: Array<{
     user: UserInfo;
     tables: string[];
+    categories?: string[];
     numTablesMinus2: number;
   }>;
 }

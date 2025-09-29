@@ -12,6 +12,7 @@ import {
 import 'app/gen-server/lib/HandlebarsHelpers';
 
 import * as fse from 'fs-extra';
+import pick from 'lodash/pick';
 import * as nodemailer from 'nodemailer';
 import * as handlebars from 'handlebars';
 
@@ -75,7 +76,8 @@ export class SMTPNotifier extends NotifierBase {
           text: txtTemplate(dynamic_template_data),
           html: htmlTemplate(dynamic_template_data),
         });
-        log.debug('SMTPNotifier: sent notification', info);
+        // Trim message when logging to the parts most relevant to debugging.
+        log.debug('SMTPNotifier: sent notification', pick(info, 'messageId', 'response', 'envelope'));
       }
     } else {
       log.warn(`SMTPNotifier: no content to send for event ${eventName}, skipping email`);

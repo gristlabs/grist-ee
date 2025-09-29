@@ -26,7 +26,8 @@ Handlebars.registerHelper('notEquals', function (
   return a !== b ? options.fn(this) : options.inverse(this);
 });
 
-Handlebars.registerHelper('length', (items: unknown[]) => items.length);
+// If the given array isn't set, return an empty value. This matches SendGrid's behavior.
+Handlebars.registerHelper('length', (items: unknown[]) => items?.length);
 
 // greaterThen block helper to compare two numbers.
 Handlebars.registerHelper('greaterThan', function(
