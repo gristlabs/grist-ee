@@ -171,6 +171,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
   private _longerContextModel = this._options.longerContextModel;
   private _maxTokens = this._options.maxTokens;
   private _maxToolCalls = this._options.maxToolCalls ?? 10;
+  private _structuredOutput = this._options.structuredOutput ?? false;
 
   public constructor(
     private _gristServer: GristServer,
@@ -705,26 +706,30 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
   }
 
   private _getResponseFormat() {
-    return {
-      type: "json_schema",
-      json_schema: {
-        name: "response",
-        strict: true,
-        schema: {
-          type: "object",
-          properties: {
-            response_text: {
-              type: "string",
+    if (this._structuredOutput) {
+      return {
+        type: "json_schema",
+        json_schema: {
+          name: "response",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              response_text: {
+                type: "string",
+              },
+              confirmation_required: {
+                type: "boolean",
+              },
             },
-            confirmation_required: {
-              type: "boolean",
-            },
+            required: ["response_text", "confirmation_required"],
+            additionalProperties: false,
           },
-          required: ["response_text", "confirmation_required"],
-          additionalProperties: false,
         },
-      },
-    };
+      };
+    } else {
+      return undefined;
+    }
   }
 
   private _getTools(): OpenAITool[] {
@@ -1769,14 +1774,13 @@ Notes:
     completion: OpenAIChatCompletion,
     appliedActions?: ApplyUAResult[]
   ): AssistanceResponseV2 {
-    const { message } = completion.choice;
+    const { choice: { message }, state } = completion;
     const { refusal } = message;
     if (refusal) {
       return {
         reply: refusal,
-        state: completion.state,
+        state,
         appliedActions,
-        confirmationRequired: false,
       };
     }
 
@@ -1785,29 +1789,38 @@ Notes:
       throw new Error("Expected non-empty content in response");
     }
 
-    // Structured output is a little buggy in GPT-4o.
-    // Sometimes it appends a newline to the content and repeats it.
-    rawContent = rawContent.split("\n")[0].trim();
-    let parsedContent: any;
-    try {
-      parsedContent = JSON.parse(rawContent);
-    } catch (e) {
-      throw new Error(`Failed to parse content as JSON: "${rawContent}"`, {
-        cause: e,
-      });
-    }
+    let reply: string;
+    let confirmationRequired: boolean | undefined;
 
-    if (typeof parsedContent.response_text !== "string") {
-      throw new Error(
-        "Parsed content is missing required field: response_text"
-      );
+    if (this._structuredOutput) {
+      // Structured output is a little buggy in GPT-4o.
+      // Sometimes it appends a newline to the content and repeats it.
+      rawContent = rawContent.split("\n")[0].trim();
+      let parsedContent: any;
+      try {
+        parsedContent = JSON.parse(rawContent);
+      } catch (e) {
+        throw new Error(`Failed to parse content as JSON: "${rawContent}"`, {
+          cause: e,
+        });
+      }
+
+      const { response_text, confirmation_required } = parsedContent;
+      if (typeof response_text !== "string" || response_text.trim() === "") {
+        throw new Error("Expected non-empty response_text in content");
+      }
+
+      reply = response_text;
+      confirmationRequired = confirmation_required;
+    } else {
+      reply = rawContent;
     }
 
     return {
-      reply: parsedContent.response_text,
-      state: completion.state,
+      reply,
+      state,
       appliedActions,
-      confirmationRequired: parsedContent.confirmation_required,
+      confirmationRequired,
     };
   }
 }

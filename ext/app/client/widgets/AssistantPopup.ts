@@ -9,6 +9,7 @@ import {
 import { inlineMarkdown } from "app/client/lib/markdown";
 import { logTelemetryEvent } from "app/client/lib/telemetry";
 import { FloatingPopup, PopupPosition } from "app/client/ui/FloatingPopup";
+import { IAssistantPopup } from "app/client/ui/IAssistantPopup";
 import {
   cssLinkText,
   cssPageEntry,
@@ -29,16 +30,24 @@ import { AssistanceState, DeveloperPromptVersion } from "app/common/Assistance";
 import { commonUrls } from "app/common/gristUrls";
 import { TelemetryEvent, TelemetryMetadata } from "app/common/Telemetry";
 import { getGristConfig } from "app/common/urlUtils";
-import { Disposable, dom, DomContents, DomElementArg, Holder, makeTestId, styled } from "grainjs";
+import { Disposable, dom, DomContents, DomElementArg, makeTestId, styled } from "grainjs";
 import { v4 as uuidv4 } from "uuid";
 
 const t = makeT("Assistant");
 
 const testId = makeTestId("test-assistant-");
 
-export class AssistantPopup extends Disposable {
+export function buildAssistantPopup(gristDoc: GristDoc): IAssistantPopup | null {
+  const { assistant } = getGristConfig();
+  if (!assistant || assistant.version === 1) {
+    return null;
+  }
+
+  return AssistantPopup.create(gristDoc, gristDoc);
+}
+
+class AssistantPopup extends Disposable {
   private _appModel = this._gristDoc.appModel;
-  private _assistant: Assistant;
   private _userId = this._appModel.currentUser?.id ?? 0;
   private _docId = this._gristDoc.docId();
   private _history = this.autoDispose(
@@ -47,7 +56,7 @@ export class AssistantPopup extends Disposable {
       {
         messages: [],
         conversationId: uuidv4(),
-        developerPromptVersion: this._getDeveloperPromptVersion(),
+        developerPromptVersion: "default",
       }
     )
   );
@@ -69,50 +78,51 @@ export class AssistantPopup extends Disposable {
       undefined
     )
   );
-  private _popupHolder = Holder.create<FloatingPopup>(this);
+  private _assistant: Assistant = Assistant.create(this, {
+    history: this._history,
+    gristDoc: this._gristDoc,
+    onSend: this._sendMessage.bind(this),
+    buildIntroMessage,
+  });
+  private _popup = FloatingPopup.create(this, {
+    title: this._buildPopupTitle.bind(this),
+    content: this._buildPopupContent.bind(this),
+    onMoveEnd: (position) => this._position.set(position),
+    onResizeEnd: ({ width, height, ...position }) => {
+      this._width.set(width);
+      this._height.set(height);
+      this._position.set(position);
+    },
+    width: this._width.get(),
+    height: this._height.get(),
+    minWidth: 328,
+    minHeight: 300,
+    position: this._position.get(),
+    minimizable: true,
+    closeButton: true,
+    closeButtonHover: () => t("Close"),
+    closeBehavior: "hide",
+    testId,
+  });
+  private _openedOnce = false;
 
-  constructor(
-    private _gristDoc: GristDoc,
-    private _options: { state?: AssistantState } = {}
-  ) {
+  constructor(private _gristDoc: GristDoc) {
     super();
-    this._assistant = Assistant.create(this, {
-      history: this._history,
-      gristDoc: this._gristDoc,
-      focusOnOpen: true,
-      onSend: this._sendMessage.bind(this),
-      buildIntroMessage,
-    });
-    this._showPopup();
-    this._logTelemetryEvent("assistantOpen");
-    if (this._options.state) {
-      const { prompt } = this._options.state;
-      this._assistant.send(prompt).catch(reportError);
-    }
   }
 
-  private _showPopup() {
-    const popup = FloatingPopup.create(this._popupHolder, {
-      title: this._buildPopupTitle.bind(this),
-      content: this._buildPopupContent.bind(this),
-      onMoveEnd: (position) => this._position.set(position),
-      onResizeEnd: ({ width, height, ...position }) => {
-        this._width.set(width);
-        this._height.set(height);
-        this._position.set(position);
-      },
-      width: this._width.get(),
-      height: this._height.get(),
-      minWidth: 328,
-      minHeight: 300,
-      position: this._position.get(),
-      minimizable: true,
-      closeButton: true,
-      closeButtonHover: () => t("Close"),
-      onClose: () => this.dispose(),
-      args: [testId("popup")],
-    });
-    popup.showPopup();
+  public open() {
+    this._popup.showPopup();
+    if (!this._openedOnce) {
+      this._assistant.scrollToBottom({ smooth: false, sync: true });
+      this._openedOnce = true;
+    }
+    this._assistant.focus();
+    this._logTelemetryEvent("assistantOpen");
+  }
+
+  public setState({ prompt }: AssistantState) {
+    this._history.set({ ...this._history.get(), developerPromptVersion: "new-document" });
+    this._assistant.send(prompt).catch(reportError);
   }
 
   private _buildPopupTitle(): DomContents {
@@ -152,11 +162,12 @@ export class AssistantPopup extends Disposable {
   }
 
   private async _sendMessage(message: string) {
+    const { developerPromptVersion = "default", state } = this._history.get();
     return await askAI(this._gristDoc, {
       description: message,
       conversationId: this._assistant.conversationId,
-      developerPromptVersion: this._assistant.developerPromptVersion,
-      state: this._history.get().state,
+      developerPromptVersion,
+      state,
     });
   }
 
@@ -175,14 +186,6 @@ export class AssistantPopup extends Disposable {
         ...metadata,
       },
     });
-  }
-
-  private _getDeveloperPromptVersion(): DeveloperPromptVersion {
-    if (this._options.state) {
-      return "new-document";
-    } else {
-      return "default";
-    }
   }
 }
 
