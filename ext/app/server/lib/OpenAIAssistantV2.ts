@@ -24,6 +24,7 @@ import {
   handleSandboxErrorOnPlatform,
   TableOperationsPlatform,
 } from "app/plugin/TableOperationsImpl";
+import { ActiveDoc } from "app/server/lib/ActiveDoc";
 import {
   getDocDataOrThrow,
   getTableById,
@@ -58,7 +59,7 @@ import {
   OpenAIChatCompletion,
   OpenAITool,
 } from "app/server/lib/IAssistant";
-import log from "app/server/lib/log";
+import { LogMethods } from "app/server/lib/LogMethods";
 import { OPENAI_TOOLS } from "app/server/lib/OpenAITools";
 import {
   AddPageWidgetParams,
@@ -109,6 +110,7 @@ import {
 } from "app/server/lib/requestUtils";
 import { runSQLQuery } from "app/server/lib/runSQLQuery";
 import { getSelectByOptions } from "app/server/lib/selectBy";
+import { shortDesc } from "app/server/lib/shortDesc";
 import * as express from "express";
 import { isEmpty, omit, pick } from "lodash";
 import moment from "moment";
@@ -163,6 +165,12 @@ export class OpenAIAssistantV2 implements AssistantV2 {
   public static readonly DEFAULT_MODEL = "gpt-4o-2024-08-06";
   public static readonly DEFAULT_LONGER_CONTEXT_MODEL = undefined;
 
+  private readonly _log = new LogMethods(
+    "OpenAIAssistantV2 ",
+    (info: { docSession: OptDocSession; doc: ActiveDoc } | null) =>
+      info ? info.doc.getLogMeta(info.docSession) : {}
+  );
+
   private _apiKey = this._options.apiKey;
   private _endpoint =
     this._options.completionEndpoint ??
@@ -200,6 +208,10 @@ export class OpenAIAssistantV2 implements AssistantV2 {
     const appliedActions: ApplyUAResult[] = [];
     while (completion.choice.finish_reason === "tool_calls") {
       if (calls > this._maxToolCalls) {
+        this._log.error(
+          { docSession, doc },
+          `exceeded max tool calls (${this._maxToolCalls})`
+        );
         throw new Error(
           "There was a problem fulfilling your request. Please try again."
         );
@@ -226,8 +238,9 @@ export class OpenAIAssistantV2 implements AssistantV2 {
           index: response.state?.messages
             ? response.state.messages.length - 1
             : -1,
-          content: completion,
+          content: response.reply,
         },
+        developerPromptVersion: request.developerPromptVersion,
       },
     });
     return response;
@@ -335,10 +348,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
       url.searchParams.set("assistantState", newAssistantState);
       return res.redirect(url.href);
     } catch (e) {
-      log.error(
-        `OpenAIAssistantV2Middleware failed to create doc in Home workspace`,
-        e
-      );
+      this._log.warn(null, "failed to redirect to new doc with prompt", e);
     }
   }
 
@@ -467,7 +477,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
       errorCode === "context_length_exceeded" ||
       result.choices?.[0].finish_reason === "length"
     ) {
-      log.warn("AI context length exceeded: ", errorMessage);
+      this._log.warn(null, "AI context length exceeded: ", errorMessage);
       if (messages.length <= 2) {
         throw new TokensExceededFirstMessageError();
       } else {
@@ -475,13 +485,13 @@ export class OpenAIAssistantV2 implements AssistantV2 {
       }
     }
     if (errorCode === "insufficient_quota") {
-      log.error("AI service provider billing quota exceeded!!!");
+      this._log.error(null, "AI service provider billing quota exceeded!!!");
       throw new QuotaExceededError();
     }
     if (apiResponse.status !== 200) {
-      throw new Error(
-        `AI service provider API returned status ${apiResponse.status}: ${resultText}`
-      );
+      const message = `AI service provider API returned status ${apiResponse.status}: ${resultText}`;
+      this._log.error(null, message);
+      throw new Error(message);
     }
     const {
       message: { content, refusal, tool_calls },
@@ -526,7 +536,7 @@ export class OpenAIAssistantV2 implements AssistantV2 {
           break;
         }
 
-        log.warn(`Waiting and then retrying after error: ${e}`);
+        this._log.warn(null, `waiting and then retrying after error`, e);
         await delay(1000);
       }
     }
@@ -756,7 +766,7 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
         docSession,
         doc,
         name,
-        JSON.parse(args)
+        safeJsonParse(args, {})
       );
       toolCallIdsAndResults.push([id, result]);
     }
@@ -794,6 +804,12 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
   ): Promise<FunctionCallResult> {
     let result: any;
     let appliedActions: ApplyUAResult[] = [];
+    this._log.debug(
+      { docSession, doc },
+      "_callFunction(%s, %s)",
+      name,
+      shortDesc(params)
+    );
     try {
       switch (name) {
         case "get_tables": {
@@ -958,8 +974,18 @@ ${view ? `The user is currently on page ${view.name} (id: ${viewId}).` : ""}
           throw new Error(`Unrecognized function: ${name}`);
         }
       }
+      this._log.debug(
+        { docSession, doc },
+        "_callFunction returning %s",
+        shortDesc(result)
+      );
       return { ok: true, result, appliedActions };
     } catch (e) {
+      this._log.warn(
+        { docSession, doc },
+        "_callFunction error",
+        e
+      );
       return {
         ok: false,
         error: String(e),
