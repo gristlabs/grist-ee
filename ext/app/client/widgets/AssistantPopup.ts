@@ -220,7 +220,7 @@ async function askAI(
 ) {
   const { description, conversationId, developerPromptVersion, state } = options;
   const viewId = grist.activeViewId.get();
-  return await grist.docApi.getAssistance({
+  return await grist.docComm.getAssistance({
     conversationId,
     context: {
       viewId: typeof viewId === "number" ? viewId : undefined,

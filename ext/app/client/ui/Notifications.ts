@@ -48,6 +48,7 @@ export function buildNotificationsConfig(owner: IDisposableOwner, docAPI: DocAPI
   const isLoading = Observable.create(owner, true);
   const isSaving = Observable.create(owner, false);
   const isAccessDenied = Observable.create(owner, false);
+  const isConfigurationMissing = Observable.create(owner, false);
   const errorMsg = Observable.create(owner, "");
   const userConfig = Observable.create<NotificationPrefs>(owner, {});
   let fullPrefsToSave: Partial<NotificationPrefsBundle> = {};
@@ -84,9 +85,15 @@ export function buildNotificationsConfig(owner: IDisposableOwner, docAPI: DocAPI
       userConfig.set(pick(prefs.currentUser || {}, 'docChanges', 'comments'));
     }))
     .catch(unlessDisposed(err => {
-      if (err instanceof ApiError && err.status === 403) {
-        userConfig.set({docChanges: false, comments: 'none'});
-        isAccessDenied.set(true);
+      if (err instanceof ApiError) {
+        if (err.status === 403) {
+          userConfig.set({docChanges: false, comments: 'none'});
+          isAccessDenied.set(true);
+        }
+        else if (err.status === 404) {
+          errorMsg.set(t('Notifications configuration API not found'));
+          isConfigurationMissing.set(true);
+        }
       } else {
         errorMsg.set(err.message);
       }
@@ -119,31 +126,41 @@ export function buildNotificationsConfig(owner: IDisposableOwner, docAPI: DocAPI
         }
 
         const accessDenied = use(isAccessDenied);
+        const configurationMissing = use(isConfigurationMissing);
+        let explanation = t('Choose when to get notified for changes in this document.');
+        if (accessDenied) {
+          explanation = t(
+            'You have public access to this document. ' +
+            "If you wish to receive notifications, the document's " +
+            'owner must add you as a collaborator. {{learnMoreLink}}.',
+            {
+              learnMoreLink: cssLink(
+                { href: commonUrls.helpSharing, target: '_blank' },
+                t('Learn more about sharing')
+              ),
+            }
+          );
+        }
+        if(configurationMissing) {
+          explanation = t('Notifications configuration is incomplete. Is Redis available '
+            + 'to this Grist installation?. {{learnMoreLink}}',
+            { learnMoreLink: cssLink(
+                { href: commonUrls.helpStateStore, target: '_blank' },
+                t('Learn more about Redis')
+              ),
+            }
+          );
+        }
         return [
-          dom('div',
-            accessDenied
-              ? t(
-                  'You have public access to this document. ' +
-                  "If you wish to receive notifications, the document's " +
-                  'owner must add you as a collaborator. {{learnMoreLink}}.',
-                  {
-                    learnMoreLink: cssLink(
-                      {href: commonUrls.helpSharing, target: '_blank'},
-                      t('Learn more about sharing')
-                    ),
-                  }
-                )
-              : t('Choose when to get notified for changes in this document.'),
-            testId('config-intro'),
-          ),
+          dom('div', explanation, testId('config-intro')),
           dom.maybe(errorMsg, (msg) => cssError(msg)),
-          dom.create(AdminSectionItem, {
+          configurationMissing ? null : dom.create(AdminSectionItem, {
             id: 'notifications-doc-edits', name: t('Changes'),
             description: null,
             value: cssToggleSwitch(docEdits),
             disabled: accessDenied ? t('Only available to document collaborators') : null,
           }),
-          dom.create(AdminSectionItem, {
+          configurationMissing ? null : dom.create(AdminSectionItem, {
             id: 'notifications-comments', name: t('Comments'),
             description: null,
             value: buildComments(comments),
