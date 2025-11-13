@@ -2,11 +2,13 @@ import {ApiError} from 'app/common/ApiError';
 import {MapWithTTL} from 'app/common/AsyncCreate';
 import {getSetMapValue} from 'app/common/gutil';
 import * as roles from 'app/common/roles';
+import {InstallAdminInfo} from 'app/common/LoginSessionAPI';
 import {User} from 'app/gen-server/entity/User';
 import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
 import {appSettings} from 'app/server/lib/AppSettings';
 import {InstallAdmin, SimpleInstallAdmin} from 'app/server/lib/InstallAdmin';
 import log from 'app/server/lib/log';
+import {Request} from 'express';
 
 // This implementation of InstallAdmin considers any user who is an owner of the org named by
 // GRIST_INSTALL_ADMIN_ORG env var to be an installation admin. The named org must already
@@ -61,6 +63,25 @@ class InstallAdminUsingOrg extends InstallAdmin {
 
   public override clearCaches(): void {
     this._cachedAdmins.clear();
+  }
+
+  public override async getAdminUsers(req: Request): Promise<InstallAdminInfo[]> {
+    const usersIds = Array.from((await this._fetchSetOfAdmins()).ids);
+    const users = await this._dbManager.usersManager().getUsersByIds(usersIds);
+    if (users.length === 0) {
+      // This should be impossible, because if there are no admin
+      // users, you won't even be able to load the admin page.
+      return [{
+        user: null,
+        reason: req.t('admin.emptyOrg', { org: this.installAdminOrg })
+      }];
+    }
+    return users.map((user) => {
+      return {
+        user: user.toUserProfile(),
+        reason: req.t('admin.orgUser', { org: this.installAdminOrg })
+      };
+    });
   }
 
   private _getSetOfAdmins(): Promise<AdminCache> {
