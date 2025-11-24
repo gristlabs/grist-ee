@@ -5,50 +5,116 @@
  * Adds one endpoint:
  *  - /connect/login: callback url for external Identity Provider.
  *
- * Expects environment variables:
- *  - GRIST_CONNECT_URL: URL of the Identity Provider endpoint to which user will be redirected upon login.
- *  - GRIST_CONNECT_SECRET: Secret for checking and adding signatures.
- *  - GRIST_CONNECT_ENDPOINT (optional): Overrides endpoint address (defaults to /connect/login).
- *  - GRIST_CONNECT_LOGOUT_URL (optional): Url to which user will be redirected after logging out (defaults
- *                                        to home page).
+ * To read more about Grist Connect SSO flow and configuration through environmental variables, in a single server
+ * setup, please visit:
+ * https://support.getgrist.com/install/grist-connect
+ *
+ * Configuration:
+ *  - url: URL of the Identity Provider endpoint to which user will be redirected upon login.
+ *  - secret: Secret for checking and adding signatures.
+ *  - endpoint (optional): Overrides endpoint address (defaults to /connect/login).
+ *  - logoutUrl (optional): Url to which user will be redirected after logging out (defaults
+ *                          to home page).
+ *  - forceLogin (optional): If set to true, user is required to be logged in after logout (useful for SSO flow).
  *
  *  Additionally relies on those environmental variables:
  *  - COOKIE_MAX_AGE: If set to 'none' makes cookie last only for active session (useful for SSO flow).
- *  - GRIST_FORCE_LOGIN: If set to true, user is required to be logged in (useful for SSO flow).
  */
 
 import {ApiError} from 'app/common/ApiError';
 import {UserProfile} from 'app/common/LoginSessionAPI';
+import {AppSettings} from 'app/server/lib/AppSettings';
 import {RequestWithLogin} from 'app/server/lib/Authorizer';
 import {forceSessionChange} from 'app/server/lib/BrowserSession';
 import {calcSignature} from 'app/server/lib/DiscourseConnect';
 import {expressWrap} from 'app/server/lib/expressWrap';
+import {getSelectedLoginSystemType} from 'app/server/lib/gristSettings';
 import {GristLoginMiddleware, GristLoginSystem, GristServer} from 'app/server/lib/GristServer';
 import log from 'app/server/lib/log';
 import {stringParam} from 'app/server/lib/requestUtils';
 import type {NextFunction, Request, Response} from 'express';
 import {URL, URLSearchParams} from 'url';
 
-// Remote identity provider URL. Setting this will enable this login system.
-const GRIST_CONNECT_URL = process.env.GRIST_CONNECT_URL;
-// Required secret key for signing requests.
-const GRIST_CONNECT_SECRET = process.env.GRIST_CONNECT_SECRET;
-// Optional override for callback URL.
-const GRIST_CONNECT_ENDPOINT = process.env.GRIST_CONNECT_ENDPOINT || '/connect/login';
-
-// A hook for dependency injection. Allows tests to override these variables on the fly.
-export const Deps = {GRIST_CONNECT_URL, GRIST_CONNECT_SECRET};
-
 /**
- * Checks if GristConnect is enabled.
+ * Interface for GristConnect configuration.
  */
-export function isConnectEnabled() {
-  return !!Deps.GRIST_CONNECT_URL;
+export interface GristConnectConfig {
+  /** URL of the Identity Provider endpoint */
+  readonly url: string;
+  /** Secret for checking and adding signatures */
+  readonly secret: string;
+  /** Override for callback endpoint address (defaults to /connect/login) */
+  readonly endpoint: string;
+  /** URL to redirect to after logout (defaults to home page) */
+  readonly logoutUrl: string;
+  /** If true, force login after logout (useful for SSO flow) */
+  readonly forceLogin: boolean;
 }
 
-function assertConfig() {
-  if (!Deps.GRIST_CONNECT_URL || !Deps.GRIST_CONNECT_SECRET) {
-    throw new Error('Grist Connect is not configured');
+/**
+ * Read GristConnect configuration from application settings.
+ */
+export function readGristConnectConfigFromSettings(settings: AppSettings): GristConnectConfig {
+  const section = settings.section('login').section('system').section('connect');
+
+  const url = section.flag('url').requireString({
+    envVar: 'GRIST_CONNECT_URL',
+  });
+
+  const secret = section.flag('secret').requireString({
+    envVar: 'GRIST_CONNECT_SECRET',
+    censor: true,
+  });
+
+  const endpoint = section.flag('endpoint').readString({
+    envVar: 'GRIST_CONNECT_ENDPOINT',
+    defaultValue: '/connect/login',
+  })!;
+
+  const logoutUrl = section.flag('logoutUrl').readString({
+    envVar: 'GRIST_CONNECT_LOGOUT_URL',
+    defaultValue: '',
+  })!;
+
+  const forceLogin = section.flag('forceLogin').readBool({
+    envVar: 'GRIST_FORCE_LOGIN',
+    defaultValue: false,
+  })!;
+
+  return {url, secret, endpoint, logoutUrl, forceLogin};
+}
+
+/**
+ * Check if GristConnect is configured based on environment variables.
+ */
+export function maybeGristConnectConfigured(settings: AppSettings): boolean {
+  const section = settings.section('login').section('system').section('connect');
+  const url = section.flag('url').readString({
+    envVar: 'GRIST_CONNECT_URL',
+  });
+  return !!url;
+}
+
+/**
+ * Check if GristConnect is enabled either by explicit selection or by configuration.
+ */
+export function isGristConnectEnabled(settings: AppSettings): boolean {
+  const selectedType = getSelectedLoginSystemType(settings);
+  if (selectedType === 'grist-connect') {
+    return true;
+  }
+  if (selectedType) {
+    return false;
+  }
+  return maybeGristConnectConfigured(settings);
+}
+
+/**
+ * Validates GristConnect configuration.
+ */
+function assertConfig(config: GristConnectConfig) {
+  if (!config.url || !config.secret) {
+    throw new Error('Grist Connect is not configured: url and secret are required');
   }
 }
 
@@ -83,11 +149,11 @@ export function signedUrl(url: URL, secret: string) {
 /**
  * Verifies and reads signed Request (it is reversed signedUrl) method.
  */
-function verifiedRequest(req: Request) {
-  assertConfig();
+function verifiedRequest(req: Request, config: GristConnectConfig) {
+  assertConfig(config);
   const sso = stringParam(req.query.sso, 'sso');
   const sig = stringParam(req.query.sig, 'sig');
-  if (calcSignature(sso, Deps.GRIST_CONNECT_SECRET!) !== sig) {
+  if (calcSignature(sso, config.secret) !== sig) {
     throw new ApiError('Invalid signature for Grist Connect request', 403);
   }
   const params = new URLSearchParams(Buffer.from(sso, 'base64').toString('utf8'));
@@ -97,14 +163,14 @@ function verifiedRequest(req: Request) {
 /**
  * Creates signed Identity Provider request URL.
  */
-function createIPProviderUrl(nonce: string, endpointUrl: string): URL {
-  assertConfig();
-  const redirect_url = new URL(Deps.GRIST_CONNECT_URL!);
+function createIPProviderUrl(nonce: string, endpointUrl: string, config: GristConnectConfig): URL {
+  assertConfig(config);
+  const redirect_url = new URL(config.url);
   redirect_url.searchParams.set('nonce', nonce);
   // We will pass return_url for the endpoint to use, but since this endpoint is static, the IP can
   // be configured to ignore this parameter and use static pre-configured URL address.
   redirect_url.searchParams.set('return_url', endpointUrl);
-  return signedUrl(redirect_url, Deps.GRIST_CONNECT_SECRET!);
+  return signedUrl(redirect_url, config.secret);
 }
 
 /**
@@ -131,10 +197,16 @@ async function createNonce(server: GristServer, req: Request, redirectUrl: strin
  * Login endpoint for GristConnect. User will be redirected here after successful login attempt
  * in the remote Identity Provider site.
  */
-async function connectLoginEndpoint(gristServer: GristServer, req: Request, res: Response, next: NextFunction) {
-  assertConfig();
+async function connectLoginEndpoint(
+  gristServer: GristServer,
+  config: GristConnectConfig,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  assertConfig(config);
 
-  const params = verifiedRequest(req);
+  const params = verifiedRequest(req, config);
   const nonce = params.get('nonce');
   if (!nonce) {
     throw new Error('Missing nonce parameter');
@@ -180,21 +252,29 @@ async function connectLoginEndpoint(gristServer: GristServer, req: Request, res:
   );
   forceSessionChange((req as RequestWithLogin).session);
 
+  const endpoint = config.endpoint;
   // Redirect to original URL or home URL. Make extra sure that we are not redirecting to connect endpoint.
   // This can happen on the error page (since the address isn't changed).
   // TODO: check if other login systems have the same issue.
   let redirectUrl = gristServer.getHomeUrl(req);
-  if (permit.url && !new URL(permit.url).pathname.startsWith(GRIST_CONNECT_ENDPOINT)) {
+  if (permit.url && !new URL(permit.url).pathname.startsWith(endpoint)) {
     redirectUrl = permit.url;
   }
   log.info(`GristConnect: Logged in as ${params.get('email')} successful, redirecting to ${redirectUrl}`, profile);
   return res.redirect(redirectUrl);
 }
 
-export async function getConnectLoginSystem(): Promise<GristLoginSystem | null> {
-  if (!isConnectEnabled()) {
-    return null;
+/**
+ * Return GristConnect login system if enabled, or undefined otherwise.
+ */
+export async function getConnectLoginSystem(settings: AppSettings): Promise<GristLoginSystem | undefined> {
+  if (!isGristConnectEnabled(settings)) {
+    return undefined;
   }
+
+  const config = readGristConnectConfigFromSettings(settings);
+  assertConfig(config);
+
   return {
     async getMiddleware(gristServer: GristServer): Promise<GristLoginMiddleware> {
       async function getLoginRedirectUrl(req: Request, target: URL): Promise<string> {
@@ -202,7 +282,8 @@ export async function getConnectLoginSystem(): Promise<GristLoginSystem | null> 
         const ipUrl = createIPProviderUrl(
           nonce,
           // We will pass our endpoint, though IPProvider might be configured with a static address.
-          gristServer.getHomeUrl(req, GRIST_CONNECT_ENDPOINT)
+          gristServer.getHomeUrl(req, config.endpoint),
+          config
         );
         return ipUrl.href;
       }
@@ -210,16 +291,16 @@ export async function getConnectLoginSystem(): Promise<GristLoginSystem | null> 
         getLoginRedirectUrl,
         getSignUpRedirectUrl: getLoginRedirectUrl,
         async getLogoutRedirectUrl(req: Request, url: URL) {
-          if (process.env.GRIST_CONNECT_LOGOUT_URL) {
-            return process.env.GRIST_CONNECT_LOGOUT_URL;
+          if (config.logoutUrl) {
+            return config.logoutUrl;
           }
-          if (process.env.GRIST_FORCE_LOGIN === 'true') {
+          if (config.forceLogin) {
             return gristServer.getHomeUrl(req);
           }
           return url.href;
         },
         async addEndpoints(app) {
-          app.get(GRIST_CONNECT_ENDPOINT, expressWrap(connectLoginEndpoint.bind(null, gristServer)));
+          app.get(config.endpoint, expressWrap(connectLoginEndpoint.bind(null, gristServer, config)));
           return 'connect';
         },
       };

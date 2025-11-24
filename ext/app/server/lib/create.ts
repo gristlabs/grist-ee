@@ -1,24 +1,24 @@
-import { Activation } from 'app/gen-server/lib/Activation';
-import { addAdminControlsEndpoints } from 'app/gen-server/lib/AdminControls';
-import { configureSendGridNotifier } from 'app/gen-server/lib/configureSendGridNotifier';
-import { configureSMTPNotifier } from 'app/gen-server/lib/configureSMTPNotifier';
-import { createDocNotificationManager } from 'app/gen-server/lib/DocNotificationManager';
-import { configureTestNotifier } from 'app/gen-server/lib/TestNotifier';
-import { configureAssistant } from 'app/server/lib/configureAssistant';
-import { checkAzureExternalStorage, configureAzureExternalStorage } from 'app/server/lib/configureAzureExternalStorage';
-import { configureEnterpriseAuditLogger } from 'app/server/lib/configureEnterpriseAuditLogger';
-import { checkMinIOExternalStorage, configureMinIOExternalStorage } from 'app/server/lib/configureMinIOExternalStorage';
-import { checkS3ExternalStorage, configureS3ExternalStorage } from 'app/server/lib/configureS3ExternalStorage';
-import { IBilling } from 'app/server/lib/IBilling';
-import { BaseCreate, ICreate, ICreateStorageOptions } from 'app/server/lib/ICreate';
-import { isRunningEnterprise } from 'app/server/lib/ActivationReader';
-import { CoreCreate } from 'app/server/lib/coreCreator';
-import { getLoginSystem } from "app/server/lib/logins";
+import {Activation} from 'app/gen-server/lib/Activation';
+import {addAdminControlsEndpoints} from 'app/gen-server/lib/AdminControls';
+import {configureSendGridNotifier} from 'app/gen-server/lib/configureSendGridNotifier';
+import {configureSMTPNotifier} from 'app/gen-server/lib/configureSMTPNotifier';
+import {createDocNotificationManager} from 'app/gen-server/lib/DocNotificationManager';
+import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
+import {configureTestNotifier} from 'app/gen-server/lib/TestNotifier';
+import {isRunningEnterprise} from 'app/server/lib/ActivationReader';
+import {configureAssistant} from 'app/server/lib/configureAssistant';
+import {checkAzureExternalStorage, configureAzureExternalStorage} from 'app/server/lib/configureAzureExternalStorage';
+import {configureEnterpriseAuditLogger} from 'app/server/lib/configureEnterpriseAuditLogger';
+import {checkMinIOExternalStorage, configureMinIOExternalStorage} from 'app/server/lib/configureMinIOExternalStorage';
+import {checkS3ExternalStorage, configureS3ExternalStorage} from 'app/server/lib/configureS3ExternalStorage';
+import {CoreCreate} from 'app/server/lib/coreCreator';
+import {getExtLoginSystem} from 'app/server/lib/extLogins';
+import {GristLoginSystem, GristServer} from 'app/server/lib/GristServer';
+import {IBilling} from 'app/server/lib/IBilling';
+import {BaseCreate, ICreate, ICreateStorageOptions} from 'app/server/lib/ICreate';
 import {INotifier} from 'app/server/lib/INotifier';
 import {InstallAdmin} from 'app/server/lib/InstallAdmin';
 import {createInstallAdminUsingOrg} from 'app/server/lib/InstallAdminUsingOrg';
-import {HomeDBManager} from 'app/gen-server/lib/homedb/HomeDBManager';
-import {GristLoginSystem, GristServer} from 'app/server/lib/GristServer';
 import {Express} from 'express';
 
 
@@ -61,8 +61,8 @@ class EnterpriseCreate extends BaseCreate {
   public override async createInstallAdmin(dbManager: HomeDBManager): Promise<InstallAdmin> {
     return createInstallAdminUsingOrg(dbManager);
   }
-  public override getLoginSystem(): Promise<GristLoginSystem> {
-    return getLoginSystem();
+  public override getLoginSystem(dbManager: HomeDBManager): Promise<GristLoginSystem> {
+    return getExtLoginSystem(dbManager.getAppSettings());
   }
   public override addExtraHomeEndpoints(gristServer: GristServer, app: Express): void {
     addAdminControlsEndpoints(gristServer.getHomeDBManager(), gristServer, app);
