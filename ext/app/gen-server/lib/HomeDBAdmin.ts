@@ -21,7 +21,7 @@ import { Doom } from 'app/gen-server/lib/Doom';
 import { HomeDBManager } from 'app/gen-server/lib/homedb/HomeDBManager';
 import { scrubUserFromBillingAccounts, scrubUserFromOrg } from "app/gen-server/lib/scrubUserFromOrg";
 import { GristServer } from 'app/server/lib/GristServer';
-import { SelectQueryBuilder } from "typeorm";
+import { ObjectLiteral, SelectQueryBuilder } from "typeorm";
 import pick = require('lodash/pick');
 
 // Postgres returns BigInts for counts, which we receive as strings. This type helps remember
@@ -356,7 +356,11 @@ export class HomeDBAdmin implements AdminControlsAPI {
   // Expects a query that includes `acl_rules`. It is very specific to the particular
   // few queries that use this helper.
   // In particular, it adds .having() clause, so the outer query must use .groupBy().
-  private _addResourceAccessInfo<T>(queryBuilder: SelectQueryBuilder<T>, userid?: number, orgVar?: string) {
+  private _addResourceAccessInfo<T extends ObjectLiteral>(
+    queryBuilder: SelectQueryBuilder<T>,
+    userid?: number,
+    orgVar?: string
+  ) {
     const filterOutSpecial = `users.id NOT IN (:everyoneId, :anonId)`;
 
     return queryBuilder
