@@ -706,17 +706,16 @@ function selectedTabComputed(owner: MultiHolder) {
 }
 
 
-function selectedRowComputed<T>(owner: MultiHolder, cleaner: (val: any) => T) {
+function selectedRowComputed<T>(owner: MultiHolder, cleaner: (val?: string) => T) {
   const computed = Computed.create<T>(owner, use => {
-    return cleaner(use(urlState().state).params?.state ?? 0);
+    return cleaner(use(urlState().state).params?.state);
   });
 
-  computed.onWrite((val: any) => {
-    val = val === 'new' ? 0 : val;
+  computed.onWrite((val: T | undefined) => {
     urlState().pushUrl({
       params: {
         ...urlParams(),
-        state: val ? String(val) : undefined,
+        state: val && val !== 'new' ? String(val) : undefined,
       }
     }, {replace: true}).catch(reportError);
   });
