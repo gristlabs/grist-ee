@@ -22,14 +22,15 @@
  */
 
 import {ApiError} from 'app/common/ApiError';
+import {GRIST_CONNECT_PROVIDER_KEY} from 'app/common/loginProviders';
 import {UserProfile} from 'app/common/LoginSessionAPI';
 import {AppSettings} from 'app/server/lib/AppSettings';
 import {RequestWithLogin} from 'app/server/lib/Authorizer';
 import {forceSessionChange} from 'app/server/lib/BrowserSession';
 import {calcSignature} from 'app/server/lib/DiscourseConnect';
 import {expressWrap} from 'app/server/lib/expressWrap';
-import {getSelectedLoginSystemType} from 'app/server/lib/gristSettings';
 import {GristLoginMiddleware, GristLoginSystem, GristServer} from 'app/server/lib/GristServer';
+import {createLoginProviderFactory, NotConfiguredError} from 'app/server/lib/loginSystemHelpers';
 import log from 'app/server/lib/log';
 import {stringParam} from 'app/server/lib/requestUtils';
 import type {NextFunction, Request, Response} from 'express';
@@ -55,11 +56,20 @@ export interface GristConnectConfig {
  * Read GristConnect configuration from application settings.
  */
 export function readGristConnectConfigFromSettings(settings: AppSettings): GristConnectConfig {
-  const section = settings.section('login').section('system').section('connect');
+  const forceLogin = settings.section('login').flag('forced').readBool({
+    envVar: 'GRIST_FORCE_LOGIN',
+    defaultValue: false,
+  })!;
 
-  const url = section.flag('url').requireString({
+  const section = settings.section('login').section('system').section(GRIST_CONNECT_PROVIDER_KEY);
+
+  const url = section.flag('url').readString({
     envVar: 'GRIST_CONNECT_URL',
   });
+
+  if (!url) {
+    throw new NotConfiguredError('GristConnect is not configured: missing url');
+  }
 
   const secret = section.flag('secret').requireString({
     envVar: 'GRIST_CONNECT_SECRET',
@@ -76,37 +86,7 @@ export function readGristConnectConfigFromSettings(settings: AppSettings): Grist
     defaultValue: '',
   })!;
 
-  const forceLogin = section.flag('forceLogin').readBool({
-    envVar: 'GRIST_FORCE_LOGIN',
-    defaultValue: false,
-  })!;
-
   return {url, secret, endpoint, logoutUrl, forceLogin};
-}
-
-/**
- * Check if GristConnect is configured based on environment variables.
- */
-export function maybeGristConnectConfigured(settings: AppSettings): boolean {
-  const section = settings.section('login').section('system').section('connect');
-  const url = section.flag('url').readString({
-    envVar: 'GRIST_CONNECT_URL',
-  });
-  return !!url;
-}
-
-/**
- * Check if GristConnect is enabled either by explicit selection or by configuration.
- */
-export function isGristConnectEnabled(settings: AppSettings): boolean {
-  const selectedType = getSelectedLoginSystemType(settings);
-  if (selectedType === 'grist-connect') {
-    return true;
-  }
-  if (selectedType) {
-    return false;
-  }
-  return maybeGristConnectConfigured(settings);
 }
 
 /**
@@ -267,13 +247,8 @@ async function connectLoginEndpoint(
 /**
  * Return GristConnect login system if enabled, or undefined otherwise.
  */
-export async function getConnectLoginSystem(settings: AppSettings): Promise<GristLoginSystem | undefined> {
-  if (!isGristConnectEnabled(settings)) {
-    return undefined;
-  }
-
+async function getLoginSystem(settings: AppSettings): Promise<GristLoginSystem> {
   const config = readGristConnectConfigFromSettings(settings);
-  assertConfig(config);
 
   return {
     async getMiddleware(gristServer: GristServer): Promise<GristLoginMiddleware> {
@@ -310,3 +285,8 @@ export async function getConnectLoginSystem(settings: AppSettings): Promise<Gris
     },
   };
 }
+
+export const getConnectLoginSystem = createLoginProviderFactory(
+  GRIST_CONNECT_PROVIDER_KEY,
+  getLoginSystem
+);

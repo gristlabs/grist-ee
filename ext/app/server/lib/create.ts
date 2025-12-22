@@ -21,7 +21,6 @@ import {InstallAdmin} from 'app/server/lib/InstallAdmin';
 import {createInstallAdminUsingOrg} from 'app/server/lib/InstallAdminUsingOrg';
 import {Express} from 'express';
 
-
 class EnterpriseCreate extends BaseCreate {
   constructor() {
     const storage: ICreateStorageOptions[] = [
@@ -61,8 +60,8 @@ class EnterpriseCreate extends BaseCreate {
   public override async createInstallAdmin(dbManager: HomeDBManager): Promise<InstallAdmin> {
     return createInstallAdminUsingOrg(dbManager);
   }
-  public override getLoginSystem(dbManager: HomeDBManager): Promise<GristLoginSystem> {
-    return getExtLoginSystem(dbManager.getAppSettings());
+  public override async getLoginSystem(): Promise<GristLoginSystem> {
+    return getExtLoginSystem();
   }
   public override addExtraHomeEndpoints(gristServer: GristServer, app: Express): void {
     addAdminControlsEndpoints(gristServer.getHomeDBManager(), gristServer, app);
